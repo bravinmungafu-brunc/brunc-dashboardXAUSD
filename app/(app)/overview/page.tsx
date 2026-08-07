@@ -2,14 +2,19 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 
-const PHASES = [
-  { key: 'accumulation', label: 'Accumulation — range formed', color: '#34D399' },
-  { key: 'manipulation', label: 'Manipulation — swept 1H low', color: '#F87171' },
-  { key: 'distribution', label: 'Distribution — expansion up', color: '#2DD4BF' },
+const TIMEFRAMES = [
+  { key: '15', label: '15min' },
+  { key: '60', label: '1H' },
+  { key: '240', label: '4H' },
+  { key: 'D', label: 'Daily' },
+  { key: 'W', label: 'Weekly' },
+  { key: 'M', label: 'Monthly' },
+  { key: '12M', label: 'Year' },
 ]
 
 export default function OverviewPage() {
   const [latestStates, setLatestStates] = useState<any[]>([])
+  const [selectedTf, setSelectedTf] = useState('15')
   const [stats, setStats] = useState<{ open: number; today: number; successRate: string | null; net: number }>({ open: 0, today: 0, successRate: null, net: 0 })
 
   useEffect(() => {
@@ -34,6 +39,13 @@ export default function OverviewPage() {
     load()
   }, [])
 
+  const selectedState = latestStates.find(s => s.timeframe === selectedTf)
+  const isBullish = selectedState?.state === 1
+  const hasData = !!selectedState
+
+  const gaugeColor = !hasData ? '#3A434D' : isBullish ? '#34D399' : '#F87171'
+  const gaugeDash = hasData ? '465 0' : '0 465'
+
   return (
     <div className="p-6 md:p-8">
       <div className="mb-6">
@@ -47,25 +59,52 @@ export default function OverviewPage() {
           <div className="flex flex-col items-center mb-5">
             <svg width="180" height="180" viewBox="0 0 180 180">
               <circle cx="90" cy="90" r="74" fill="none" stroke="#141A21" strokeWidth="12" />
-              <circle cx="90" cy="90" r="74" fill="none" stroke="#34D399" strokeWidth="12" strokeDasharray="155 465" strokeLinecap="round" transform="rotate(-90 90 90)" opacity="0.9" />
-              <circle cx="90" cy="90" r="74" fill="none" stroke="#F87171" strokeWidth="12" strokeDasharray="77 465" strokeDashoffset="-155" strokeLinecap="round" transform="rotate(-90 90 90)" opacity="0.9" />
-              <circle cx="90" cy="90" r="74" fill="none" stroke="#2DD4BF" strokeWidth="12" strokeDasharray="116 465" strokeDashoffset="-232" strokeLinecap="round" transform="rotate(-90 90 90)" />
+              <circle
+                cx="90" cy="90" r="74" fill="none"
+                stroke={gaugeColor}
+                strokeWidth="12"
+                strokeDasharray={gaugeDash}
+                strokeLinecap="round"
+                transform="rotate(-90 90 90)"
+                opacity="0.9"
+                style={{ transition: 'stroke 0.2s ease' }}
+              />
             </svg>
-            <div className="text-center -mt-[100px] mb-[70px]">
-              <div className="text-lg font-bold text-[#2DD4BF] tracking-wide">DISTRIBUTION</div>
-              <div className="font-mono text-[10px] text-[#7C8896] mt-1">true move in progress</div>
+            <div className="text-center -mt-[110px] mb-[80px]">
+              <div className="text-lg font-bold tracking-wide" style={{ color: gaugeColor }}>
+                {!hasData ? '—' : isBullish ? 'BULLISH' : 'BEARISH'}
+              </div>
+              <div className="font-mono text-[10px] text-[#7C8896] mt-1">
+                {TIMEFRAMES.find(t => t.key === selectedTf)?.label} box-chain state
+              </div>
             </div>
           </div>
-          <div className="space-y-2">
-            {PHASES.map(p => (
-              <div key={p.key} className={`flex items-center gap-2.5 font-mono text-xs px-3 py-2 rounded-lg border ${p.key === 'distribution' ? 'border-[#2DD4BF] bg-[#2DD4BF]/10 text-white' : 'border-[#1B232C] text-[#7C8896]'}`}>
-                <span className="w-2 h-2 rounded-sm" style={{ background: p.color }} />
-                {p.label}
-              </div>
+
+          <div className="flex flex-wrap gap-2">
+            {TIMEFRAMES.map(tf => (
+              <button
+                key={tf.key}
+                onClick={() => setSelectedTf(tf.key)}
+                className={`font-mono text-xs px-3 py-1.5 rounded-lg border transition-colors ${
+                  selectedTf === tf.key
+                    ? 'border-[#2DD4BF] bg-[#2DD4BF]/10 text-white'
+                    : 'border-[#1B232C] text-[#7C8896] hover:border-[#3A434D]'
+                }`}
+              >
+                {tf.label}
+              </button>
             ))}
           </div>
+
           <div className="mt-4 bg-[#0F141A] border border-[#1B232C] rounded-lg p-3.5 font-mono text-[11px] text-[#7C8896] leading-relaxed">
-            <span className="text-[#34D399] font-semibold">Bullish</span> — price wicked below the 1H box low then closed back above it. Bearish path invalidated on close. Valid until close back below the 1H box low or its high is reached.
+            {!hasData ? (
+              <>No data yet for this timeframe — waiting on live signal feed.</>
+            ) : (
+              <>
+                <span style={{ color: gaugeColor }} className="font-semibold">{isBullish ? 'Bullish' : 'Bearish'}</span>
+                {' '}— current box-chain state on the {TIMEFRAMES.find(t => t.key === selectedTf)?.label} timeframe.
+              </>
+            )}
           </div>
         </div>
 

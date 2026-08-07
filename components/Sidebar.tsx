@@ -22,7 +22,7 @@ export default function Sidebar() {
   }
 
   return (
-    <nav className="bg-[#05070A] border-r border-[#1B232C] p-6 flex flex-col md:h-screen md:sticky md:top-0 md:w-[280px] flex-row md:flex-col items-center md:items-stretch overflow-x-auto gap-2 md:gap-0">
+    <nav className="bg-[#05070A] border-r border-[#1B232C] p-6 flex flex-row md:flex-col md:h-screen md:sticky md:top-0 md:w-[280px] items-center md:items-stretch overflow-x-auto gap-2 md:gap-0">
       <div className="hidden md:flex items-center gap-3 mb-10 px-1">
         <div className="w-10 h-10 rounded-full overflow-hidden border border-[#14625A] bg-[#0B0F14] flex-shrink-0">
           <Image src="/logo.png" alt="BRUNC" width={40} height={40} className="object-cover" />

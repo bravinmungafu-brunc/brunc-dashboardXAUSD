@@ -26,6 +26,36 @@ export default function PerformancePage() {
     pct: g.group.length ? Math.round((g.group.filter(s => s.final_outcome && s.final_outcome !== 'stopped_out').length / g.group.length) * 100) : null
   }))
 
+  // Performance by Grade — groups resolved signals by grade.value/grade.of
+  const byGrade = (() => {
+    const map = new Map<string, any[]>()
+    closed.forEach(s => {
+      const gv = s.grade?.value
+      if (gv === undefined || gv === null) return
+      const key = `${gv}/${s.grade?.of ?? 7}`
+      if (!map.has(key)) map.set(key, [])
+      map.get(key)!.push(s)
+    })
+    return Array.from(map.entries())
+      .map(([label, group]) => ({
+        label,
+        count: group.length,
+        pct: group.length ? Math.round((group.filter(s => s.final_outcome && s.final_outcome !== 'stopped_out').length / group.length) * 100) : null
+      }))
+      .sort((a, b) => b.label.localeCompare(a.label))
+  })()
+
+  // Performance by Timeframe — hit rate per TP level (TP1=15min, TP2=1H, TP3=4H)
+  const byTimeframe = [
+    { key: 'tp1_hit', label: 'TP1 · 15min' },
+    { key: 'tp2_hit', label: 'TP2 · 1H' },
+    { key: 'tp3_hit', label: 'TP3 · 4H' },
+  ].map(tp => {
+    const tracked = closed.filter(s => s[tp.key] !== undefined && s[tp.key] !== null)
+    const hit = tracked.filter(s => s[tp.key] === true).length
+    return { label: tp.label, count: tracked.length, pct: tracked.length ? Math.round((hit / tracked.length) * 100) : null }
+  })
+
   return (
     <div className="p-6 md:p-8">
       <div className="mb-6">
@@ -80,6 +110,44 @@ export default function PerformancePage() {
             </div>
           ))}
         </div>
+      </div>
+
+      <div className="bg-[#0B0F14] border border-[#1B232C] rounded-xl p-6 mt-5">
+        <div className="font-mono text-[11px] tracking-widest text-[#7C8896] uppercase mb-4">Performance by Grade</div>
+        {byGrade.length === 0 ? (
+          <div className="text-[#7C8896] font-mono text-sm">No graded signals resolved yet — populates once closed signals carry a grade score.</div>
+        ) : (
+          byGrade.map((g, i) => (
+            <div key={i} className="mb-4">
+              <div className="flex justify-between font-mono text-sm mb-1.5">
+                <span className="text-[#EDEFF2]">Grade {g.label} <span className="text-[#3A434D]">· {g.count} signals</span></span>
+                <span className="text-white">{g.pct !== null ? g.pct + '%' : '—'}</span>
+              </div>
+              <div className="h-2 bg-[#0F141A] rounded-full overflow-hidden">
+                <div className="h-full bg-[#2DD4BF]" style={{ width: `${g.pct ?? 0}%` }} />
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="bg-[#0B0F14] border border-[#1B232C] rounded-xl p-6 mt-5">
+        <div className="font-mono text-[11px] tracking-widest text-[#7C8896] uppercase mb-4">Performance by Timeframe — HTF Confluence</div>
+        {byTimeframe.every(t => t.count === 0) ? (
+          <div className="text-[#7C8896] font-mono text-sm">No TP-level outcome data yet — populates once the closed-signal analysis job runs.</div>
+        ) : (
+          byTimeframe.map((t, i) => (
+            <div key={i} className="mb-4">
+              <div className="flex justify-between font-mono text-sm mb-1.5">
+                <span className="text-[#EDEFF2]">{t.label} <span className="text-[#3A434D]">· {t.count} tracked</span></span>
+                <span className="text-white">{t.pct !== null ? t.pct + '%' : '—'}</span>
+              </div>
+              <div className="h-2 bg-[#0F141A] rounded-full overflow-hidden">
+                <div className="h-full bg-[#34D399]" style={{ width: `${t.pct ?? 0}%` }} />
+              </div>
+            </div>
+          ))
+        )}
       </div>
 
       {closed.length === 0 && (

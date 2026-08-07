@@ -3,17 +3,26 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Sidebar from '@/components/Sidebar'
 import Topbar from '@/components/Topbar'
+import { supabase } from '@/lib/supabaseClient'
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false)
   const router = useRouter()
 
   useEffect(() => {
-    if (!localStorage.getItem('brunc_auth')) {
-      router.replace('/login')
-    } else {
-      setReady(true)
-    }
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) {
+        router.replace('/login')
+      } else {
+        setReady(true)
+      }
+    })
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) router.replace('/login')
+    })
+
+    return () => listener.subscription.unsubscribe()
   }, [router])
 
   if (!ready) {

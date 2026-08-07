@@ -16,6 +16,10 @@ export default function AnalysisPage() {
   const session = getSession()
   const now = new Date()
 
+  const [resolving, setResolving] = useState(false)
+  const [resolveError, setResolveError] = useState('')
+  const [resolveResult, setResolveResult] = useState<any>(null)
+
   async function runAnalysis() {
     setLoading(true)
     setError('')
@@ -31,6 +35,21 @@ export default function AnalysisPage() {
     setLoading(false)
   }
 
+  async function runCloseSignalAnalysis() {
+    setResolving(true)
+    setResolveError('')
+    setResolveResult(null)
+    try {
+      const res = await fetch('/api/resolve-signals', { method: 'POST' })
+      const data = await res.json()
+      if (data.error) setResolveError(data.error)
+      else setResolveResult(data)
+    } catch {
+      setResolveError('Could not reach the resolution service. Check your Alpha Vantage API key in .env.local')
+    }
+    setResolving(false)
+  }
+
   return (
     <div className="p-6 md:p-8 max-w-3xl fade-up">
       <div className="mb-7">
@@ -40,7 +59,6 @@ export default function AnalysisPage() {
         </h1>
       </div>
 
-      {/* Session context bar */}
       <div className="bg-[#0D1218] border border-[#1C2530] rounded-2xl p-4 mb-5 flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-4">
           <div>
@@ -66,7 +84,6 @@ export default function AnalysisPage() {
         </div>
       </div>
 
-      {/* Action */}
       <button onClick={runAnalysis} disabled={loading}
         className="flex items-center gap-2.5 px-5 py-3 bg-[#2B8CE0] hover:bg-[#3a9cf0] disabled:opacity-50 text-white font-semibold text-sm rounded-xl transition-all mb-5">
         {loading ? (
@@ -117,6 +134,64 @@ export default function AnalysisPage() {
           </div>
         </div>
       )}
+
+      <div className="mt-10 pt-8 border-t border-[#1C2530]">
+        <div className="mb-5">
+          <div className="mono text-[10px] tracking-[0.3em] text-[#2DD4BF] uppercase mb-1">Outcome Resolution</div>
+          <h2 className="text-xl font-bold text-white">
+            Closed Signal Analysis <span className="text-[#7C8896] font-normal text-sm ml-2">— compares logged signals against live market data</span>
+          </h2>
+        </div>
+
+        <button onClick={runCloseSignalAnalysis} disabled={resolving}
+          className="flex items-center gap-2.5 px-5 py-3 bg-[#2DD4BF] hover:bg-[#4ee0cc] disabled:opacity-50 text-[#05070A] font-semibold text-sm rounded-xl transition-all mb-5">
+          {resolving ? (
+            <>
+              <span className="w-4 h-4 border-2 border-[#05070A]/30 border-t-[#05070A] rounded-full inline-block" style={{ animation: 'spin 0.7s linear infinite' }} />
+              Analysing closed signals…
+            </>
+          ) : (
+            <>ANALYSE</>
+          )}
+        </button>
+
+        {resolveError && (
+          <div className="bg-[#E5555A]/10 border border-[#E5555A]/25 rounded-2xl px-5 py-4 mono text-xs text-[#E5555A] mb-4">
+            {resolveError}
+          </div>
+        )}
+
+        {resolveResult && (
+          <div className="bg-[#0D1218] border border-[#1C2530] rounded-2xl p-6 fade-up">
+            <div className="flex items-center gap-2 mb-4 pb-4 border-b border-[#1C2530]">
+              <span className="mono text-[10px] text-[#2DD4BF] tracking-widest uppercase">Resolution Summary</span>
+            </div>
+            <div className="grid grid-cols-3 gap-4 mono text-sm text-[#EDEFF2] mb-3">
+              <div><span className="text-[#7C8896]">Checked:</span> {resolveResult.checked ?? '—'}</div>
+              <div><span className="text-[#34D399]">Resolved:</span> {resolveResult.resolved ?? '—'}</div>
+              <div><span className="text-[#7C8896]">Still open:</span> {resolveResult.stillOpen ?? '—'}</div>
+            </div>
+            {Array.isArray(resolveResult.updates) && resolveResult.updates.length > 0 && (
+              <div className="mt-3 space-y-1.5">
+                {resolveResult.updates.map((u: any, i: number) => (
+                  <div key={i} className="font-mono text-[11px] text-[#7C8896] flex justify-between border-t border-[#1C2530] pt-1.5">
+                    <span>{u.signal_id}</span>
+                    <span className={u.outcome === 'stopped_out' ? 'text-[#F87171]' : 'text-[#34D399]'}>{u.outcome}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {!resolveResult && !resolving && !resolveError && (
+          <div className="bg-[#0D1218] border border-[#1C2530] border-dashed rounded-2xl p-10 text-center">
+            <div className="mono text-[11px] text-[#7C8896]">
+              Click "ANALYSE" to pull live market data from Alpha Vantage and mark each closed-window signal as a win or loss. Results feed the Performance page.
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

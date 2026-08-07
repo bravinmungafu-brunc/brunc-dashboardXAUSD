@@ -1,7 +1,23 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
-import { signalPointsSummary } from '@/lib/points'
+
+function getExits(sig: any) {
+  const sl = sig.exits?.sl ?? sig.stop_loss ?? null
+  const tp1 = sig.exits?.tp1 ?? null
+  const tp2 = sig.exits?.tp2 ?? null
+  const tp3 = sig.exits?.tp3 ?? null
+  const entry = sig.entry ?? sig.price ?? null
+  return { sl, tp1, tp2, tp3, entry }
+}
+
+function computeRR(entry: number | null, sl: number | null, tp1: number | null) {
+  if (entry == null || sl == null || tp1 == null) return { riskPoints: null, rewardPoints: null, rr: null }
+  const riskPoints = Math.abs(entry - sl)
+  const rewardPoints = Math.abs(tp1 - entry)
+  const rr = riskPoints > 0 ? (rewardPoints / riskPoints).toFixed(2) : null
+  return { riskPoints: riskPoints.toFixed(2), rewardPoints: rewardPoints.toFixed(2), rr }
+}
 
 export default function SignalsPage() {
   const [signals, setSignals] = useState<any[]>([])
@@ -23,7 +39,7 @@ export default function SignalsPage() {
 
   const filtered = signals.filter(s => {
     if (filter === 'all') return true
-    if (filter === 'pending') return s.status === 'open' && !s.entry_filled
+    if (filter === 'sniper_confirmation') return s.signal_type === 'sniper_confirmation'
     if (filter === 'open') return s.status === 'open'
     if (filter === 'closed') return s.status === 'closed'
     if (filter === 'precision') return s.tier === 1
@@ -39,11 +55,11 @@ export default function SignalsPage() {
       </div>
 
       <div className="flex gap-2 mb-6 flex-wrap">
-        {['all','pending','precision','fade','open','closed'].map(f => (
+        {['all','sniper_confirmation','precision','fade','open','closed'].map(f => (
           <button key={f} onClick={() => setFilter(f)}
             className={`font-mono text-[11px] uppercase tracking-wide px-4 py-1.5 rounded ${
               filter === f ? 'bg-[#14625A]/40 text-[#2DD4BF] border border-[#2DD4BF]' : 'border border-[#1B232C] text-[#7C8896]'
-            }`}>{f}</button>
+            }`}>{f === 'sniper_confirmation' ? 'SNIPER CONFIRMATION' : f}</button>
         ))}
       </div>
 
@@ -54,43 +70,60 @@ export default function SignalsPage() {
       ) : (
         <div className="space-y-4">
           {filtered.map(sig => {
-            const { riskPoints, rewardPoints, rr } = signalPointsSummary(sig)
-            const tierLabel = sig.tier === 1 ? 'PRECISION' : 'FADE'
+            const { sl, tp1, tp2, tp3, entry } = getExits(sig)
+            const { riskPoints, rewardPoints, rr } = computeRR(entry, sl, tp1)
+            const tierLabel = sig.signal_type
+              ? sig.signal_type.replace(/_/g, ' ').toUpperCase()
+              : (sig.tier === 1 ? 'PRECISION' : 'FADE')
+            const gradeValue = sig.grade?.value ?? null
+            const gradeOf = sig.grade?.of ?? null
+
             return (
               <div key={sig.id} className="bg-[#0B0F14] border-l-2 border-l-[#2DD4BF] border-y border-r border-[#1B232C] rounded-xl p-5">
                 <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
                   <span className="font-bold text-white text-base flex items-center gap-2">
-                    {sig.direction === 'long' ? <span className="text-[#34D399]">▲</span> : <span className="text-[#F87171]">▼</span>}
+                    {(sig.direction === 'long' || sig.direction === 'buy') ? <span className="text-[#34D399]">▲</span> : <span className="text-[#F87171]">▼</span>}
                     {sig.direction?.toUpperCase()} {sig.symbol}
                     <span className="font-mono text-[10px] px-2 py-0.5 rounded border border-[#2DD4BF] text-[#2DD4BF]">{tierLabel}</span>
+                    {gradeValue !== null && (
+                      <span className="font-mono text-[10px] px-2 py-0.5 rounded border border-[#7C8896] text-[#7C8896]">
+                        GRADE {gradeValue}/{gradeOf}
+                      </span>
+                    )}
                   </span>
                   <span className={`font-mono text-[10px] px-2.5 py-1 rounded ${sig.status === 'open' ? 'bg-[#14625A]/30 text-[#2DD4BF]' : 'bg-[#34D399]/15 text-[#34D399]'}`}>
                     {sig.status === 'open' ? (sig.entry_filled ? 'OPEN' : 'PENDING') : (sig.final_outcome || 'CLOSED').toUpperCase()}
                   </span>
                 </div>
 
-                <div className="grid grid-cols-2 md:grid-cols-6 gap-2.5 mb-3">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5 mb-3">
                   <div className="bg-[#0F141A] rounded-lg p-2.5">
                     <div className="text-[9px] text-[#7C8896] uppercase tracking-wide mb-1 font-mono">Stop</div>
-                    <div className="text-[#F87171] font-mono text-sm">{sig.stop_loss}</div>
+                    <div className="text-[#F87171] font-mono text-sm">{sl ?? '—'}</div>
                   </div>
                   <div className="bg-[#0F141A] rounded-lg p-2.5">
                     <div className="text-[9px] text-[#7C8896] uppercase tracking-wide mb-1 font-mono">Entry</div>
-                    <div className="text-white font-mono text-sm">{sig.entry}</div>
+                    <div className="text-white font-mono text-sm">{entry ?? '—'}</div>
                   </div>
-                  {rewardPoints.slice(0,4).map((tp: any, i: number) => (
-                    <div key={i} className="bg-[#0F141A] rounded-lg p-2.5">
-                      <div className="text-[9px] text-[#7C8896] uppercase tracking-wide mb-1 font-mono">TP{i+1}</div>
-                      <div className="text-[#34D399] font-mono text-sm">{tp.price}</div>
-                    </div>
-                  ))}
+                  <div className="bg-[#0F141A] rounded-lg p-2.5">
+                    <div className="text-[9px] text-[#7C8896] uppercase tracking-wide mb-1 font-mono">TP1 <span className="text-[#3A434D]">· 15min</span></div>
+                    <div className="text-[#34D399] font-mono text-sm">{tp1 ?? '—'}</div>
+                  </div>
+                  <div className="bg-[#0F141A] rounded-lg p-2.5">
+                    <div className="text-[9px] text-[#7C8896] uppercase tracking-wide mb-1 font-mono">TP2 <span className="text-[#3A434D]">· 1H</span></div>
+                    <div className="text-[#34D399] font-mono text-sm">{tp2 ?? '—'}</div>
+                  </div>
+                  <div className="bg-[#0F141A] rounded-lg p-2.5">
+                    <div className="text-[9px] text-[#7C8896] uppercase tracking-wide mb-1 font-mono">TP3 <span className="text-[#3A434D]">· 4H</span></div>
+                    <div className="text-[#34D399] font-mono text-sm">{tp3 ?? '—'}</div>
+                  </div>
                 </div>
 
                 <div className="font-mono text-[11px] text-[#7C8896] mb-3">{sig.reasoning || 'Signal logic recorded from live signal payload.'}</div>
 
                 <div className="flex justify-between font-mono text-[11px] text-[#7C8896] flex-wrap gap-2">
                   <span>Risk: <span className="text-[#F87171]">{riskPoints ?? '—'} pts</span></span>
-                  <span>Target: <span className="text-[#2DD4BF]">+{rewardPoints[0]?.points ?? '—'} pts</span> · R:R <span className="text-white">{rr ?? '—'}</span></span>
+                  <span>Target: <span className="text-[#2DD4BF]">+{rewardPoints ?? '—'} pts</span> · R:R <span className="text-white">{rr ?? '—'}</span></span>
                 </div>
               </div>
             )
