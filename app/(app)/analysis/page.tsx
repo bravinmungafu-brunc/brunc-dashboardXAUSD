@@ -9,8 +9,21 @@ function getSession() {
   return { name: 'Overlap', hours: '22:00–00:00' }
 }
 
+type Assessment = {
+  signal_id: string
+  validity: 'valid' | 'caution' | 'invalid'
+  reasoning: string
+  recommendation: string
+}
+
+const VALIDITY_STYLE: Record<string, { color: string; label: string }> = {
+  valid:   { color: '#2B8CE0', label: 'VALID' },
+  caution: { color: '#F5A623', label: 'CAUTION' },
+  invalid: { color: '#F87171', label: 'INVALID' },
+}
+
 export default function AnalysisPage() {
-  const [analysis, setAnalysis] = useState<string | null>(null)
+  const [assessments, setAssessments] = useState<Assessment[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const session = getSession()
@@ -23,12 +36,12 @@ export default function AnalysisPage() {
   async function runAnalysis() {
     setLoading(true)
     setError('')
-    setAnalysis(null)
+    setAssessments(null)
     try {
       const res = await fetch('/api/analysis')
       const data = await res.json()
       if (data.error) setError(data.error)
-      else setAnalysis(data.text)
+      else setAssessments(data.assessments)
     } catch {
       setError('Could not reach analysis service. Check your Gemini API key in .env.local')
     }
@@ -89,7 +102,7 @@ export default function AnalysisPage() {
         {loading ? (
           <>
             <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full inline-block" style={{ animation: 'spin 0.7s linear infinite' }} />
-            Analyzing market…
+            Analyzing signals &amp; news…
           </>
         ) : (
           <>
@@ -109,28 +122,32 @@ export default function AnalysisPage() {
         </div>
       )}
 
-      {analysis && (
-        <div className="bg-[#0D1218] border border-[#1C2530] rounded-2xl p-6 fade-up">
-          <div className="flex items-center gap-2 mb-4 pb-4 border-b border-[#1C2530]">
-            <div className="w-6 h-6 rounded-lg bg-[#2B8CE0]/15 border border-[#2B8CE0]/25 flex items-center justify-center">
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                <circle cx="5" cy="5" r="4" stroke="#2B8CE0" strokeWidth="1.2"/>
-                <path d="M3.5 5.5l1 1 2-2" stroke="#2B8CE0" strokeWidth="1.2" strokeLinecap="round"/>
-              </svg>
-            </div>
-            <span className="mono text-[10px] text-[#2B8CE0] tracking-widest uppercase">Gemini Analysis Output</span>
-            <span className="mono text-[10px] text-[#7C8896] ml-auto">{session.name} session</span>
-          </div>
-          <div className="text-sm text-[#EDEFF2] leading-relaxed whitespace-pre-wrap">
-            {analysis}
-          </div>
+      {assessments && assessments.length > 0 && (
+        <div className="space-y-3 mb-4 fade-up">
+          {assessments.map((a, i) => {
+            const style = VALIDITY_STYLE[a.validity] || VALIDITY_STYLE.caution
+            return (
+              <div key={i} className="bg-[#0D1218] border border-[#1C2530] rounded-2xl p-5">
+                <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                  <span className="mono text-xs text-white font-semibold">{a.signal_id}</span>
+                  <span className="mono text-[10px] px-2.5 py-1 rounded border" style={{ color: style.color, borderColor: style.color }}>
+                    {style.label}
+                  </span>
+                </div>
+                <div className="text-sm text-[#EDEFF2] leading-relaxed mb-2">{a.reasoning}</div>
+                <div className="mono text-[11px] text-[#7C8896]">
+                  <span className="text-[#2DD4BF]">Suggests:</span> {a.recommendation}
+                </div>
+              </div>
+            )
+          })}
         </div>
       )}
 
-      {!analysis && !loading && !error && (
+      {!assessments && !loading && !error && (
         <div className="bg-[#0D1218] border border-[#1C2530] border-dashed rounded-2xl p-10 text-center">
           <div className="mono text-[11px] text-[#7C8896]">
-            Click "Run AI Analysis" to generate insights from resolved signals and current market context.
+            Click "Run AI Analysis" to generate per-signal insights from open signals and current market context.
           </div>
         </div>
       )}
@@ -176,7 +193,7 @@ export default function AnalysisPage() {
                 {resolveResult.updates.map((u: any, i: number) => (
                   <div key={i} className="font-mono text-[11px] text-[#7C8896] flex justify-between border-t border-[#1C2530] pt-1.5">
                     <span>{u.signal_id}</span>
-                    <span className={u.outcome === 'stopped_out' ? 'text-[#F87171]' : 'text-[#34D399]'}>{u.outcome}</span>
+                    <span className={u.outcome === 'stopped_out' ? 'text-[#F87171]' : 'text-[#2B8CE0]'}>{u.outcome}</span>
                   </div>
                 ))}
               </div>

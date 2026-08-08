@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 
 const TIMEFRAMES = [
@@ -17,32 +17,37 @@ export default function OverviewPage() {
   const [selectedTf, setSelectedTf] = useState('15')
   const [stats, setStats] = useState<{ open: number; today: number; successRate: string | null; net: number }>({ open: 0, today: 0, successRate: null, net: 0 })
 
-  useEffect(() => {
-    async function load() {
-      const { data: states } = await supabase.from('tf_states').select('*').order('bar_time', { ascending: false }).limit(8)
-      setLatestStates(states || [])
+  const load = useCallback(async () => {
+    const { data: states } = await supabase.from('tf_states').select('*').order('bar_time', { ascending: false }).limit(8)
+    setLatestStates(states || [])
 
-      const { data: openSignals } = await supabase.from('signals').select('id').eq('status', 'open')
-      const { data: resolved } = await supabase.from('signals').select('final_outcome').eq('status', 'closed')
-      const wins = (resolved || []).filter((s: any) => s.final_outcome && s.final_outcome !== 'stopped_out').length
-      const total = (resolved || []).length
-      const todayStart = new Date(); todayStart.setHours(0,0,0,0)
-      const { data: todaySignals } = await supabase.from('signals').select('id').gte('created_at', todayStart.toISOString())
+    const { data: openSignals } = await supabase.from('signals').select('id').eq('status', 'open')
+    const { data: resolved } = await supabase.from('signals').select('final_outcome').eq('status', 'closed')
+    const wins = (resolved || []).filter((s: any) => s.final_outcome && s.final_outcome !== 'stopped_out').length
+    const total = (resolved || []).length
+    const todayStart = new Date(); todayStart.setHours(0,0,0,0)
+    const { data: todaySignals } = await supabase.from('signals').select('id').gte('created_at', todayStart.toISOString())
 
-      setStats({
-        open: openSignals?.length || 0,
-        today: todaySignals?.length || 0,
-        successRate: total > 0 ? ((wins / total) * 100).toFixed(1) : null,
-        net: 0
-      })
-    }
-    load()
+    setStats({
+      open: openSignals?.length || 0,
+      today: todaySignals?.length || 0,
+      successRate: total > 0 ? ((wins / total) * 100).toFixed(1) : null,
+      net: 0
+    })
   }, [])
+
+  useEffect(() => {
+    load()
+    const channel = supabase.channel('overview-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'signals' }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tf_states' }, load)
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [load])
 
   const selectedState = latestStates.find(s => s.timeframe === selectedTf)
   const isBullish = selectedState?.state === 1
   const hasData = !!selectedState
-
   const gaugeColor = !hasData ? '#3A434D' : isBullish ? '#34D399' : '#F87171'
   const gaugeDash = hasData ? '465 0' : '0 465'
 

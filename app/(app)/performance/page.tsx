@@ -1,17 +1,22 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 
 export default function PerformancePage() {
   const [signals, setSignals] = useState<any[]>([])
 
-  useEffect(() => {
-    async function load() {
-      const { data } = await supabase.from('signals').select('*').order('created_at', { ascending: true })
-      setSignals(data || [])
-    }
-    load()
+  const load = useCallback(async () => {
+    const { data } = await supabase.from('signals').select('*').order('created_at', { ascending: true })
+    setSignals(data || [])
   }, [])
+
+  useEffect(() => {
+    load()
+    const channel = supabase.channel('performance-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'signals' }, load)
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [load])
 
   const closed = signals.filter(s => s.status === 'closed')
   const wins = closed.filter(s => s.final_outcome && s.final_outcome !== 'stopped_out').length
@@ -19,14 +24,13 @@ export default function PerformancePage() {
   const successRate = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : null
 
   const byTier = [
-    { label: 'Precision entries', group: closed.filter(s => s.tier === 1) },
-    { label: 'Fade entries', group: closed.filter(s => s.tier !== 1) },
+    { label: 'Precision entries', group: closed.filter(s => s.signal_type === 'precision') },
+    { label: 'Fade / confirmation entries', group: closed.filter(s => s.signal_type !== 'precision') },
   ].map(g => ({
     label: g.label,
     pct: g.group.length ? Math.round((g.group.filter(s => s.final_outcome && s.final_outcome !== 'stopped_out').length / g.group.length) * 100) : null
   }))
 
-  // Performance by Grade — groups resolved signals by grade.value/grade.of
   const byGrade = (() => {
     const map = new Map<string, any[]>()
     closed.forEach(s => {
@@ -45,7 +49,6 @@ export default function PerformancePage() {
       .sort((a, b) => b.label.localeCompare(a.label))
   })()
 
-  // Performance by Timeframe — hit rate per TP level (TP1=15min, TP2=1H, TP3=4H)
   const byTimeframe = [
     { key: 'tp1_hit', label: 'TP1 · 15min' },
     { key: 'tp2_hit', label: 'TP2 · 1H' },
@@ -60,7 +63,7 @@ export default function PerformancePage() {
     <div className="p-6 md:p-8">
       <div className="mb-6">
         <h1 className="text-3xl font-bold text-white">Performance <span className="text-[#3A434D] font-medium">— success rate &amp; analytics</span></h1>
-        <div className="font-mono text-xs text-[#7C8896] mt-2">Track record across every precision and fade signal logged since engine start</div>
+        <div className="font-mono text-xs text-[#7C8896] mt-2">Track record across every signal logged since engine start</div>
       </div>
 
       <div className="bg-[#0B0F14] border border-[#1B232C] rounded-xl p-6 mb-5 flex flex-wrap items-center justify-between gap-6">
