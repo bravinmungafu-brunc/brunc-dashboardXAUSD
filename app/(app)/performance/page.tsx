@@ -2,6 +2,44 @@
 import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 
+const POINT_SIZE = 0.01
+
+function pointsBetween(a: number, b: number) {
+  return Math.round(Math.abs(a - b) / POINT_SIZE)
+}
+
+// Approximation: for tp_hit outcomes, uses the furthest TP marked hit
+// (TP3 > TP2 > TP1) as the reference exit price. Since resolution is a
+// live spot-price snapshot (not full history), this is the most accurate
+// read available, not a precise recorded fill price.
+function netPointsForSignal(sig: any): number {
+  const entry = sig.entry
+  const exits = sig.exits || {}
+  if (entry == null) return 0
+
+  if (sig.final_outcome === 'stopped_out' && exits.sl != null) {
+    return -pointsBetween(entry, exits.sl)
+  }
+  if (sig.final_outcome === 'tp_hit') {
+    const exitPrice = sig.tp3_hit ? exits.tp3 : sig.tp2_hit ? exits.tp2 : sig.tp1_hit ? exits.tp1 : null
+    if (exitPrice != null) return pointsBetween(entry, exitPrice)
+  }
+  return 0
+}
+
+const SESSION_BOUNDS = [
+  { name: 'Asian', start: 0, end: 7 },
+  { name: 'London', start: 7, end: 13 },
+  { name: 'New York', start: 13, end: 22 },
+  { name: 'Overlap', start: 22, end: 24 },
+]
+
+function sessionForDate(dateStr: string) {
+  const h = new Date(dateStr).getUTCHours()
+  const match = SESSION_BOUNDS.find(s => h >= s.start && h < s.end)
+  return match ? match.name : 'Overlap'
+}
+
 export default function PerformancePage() {
   const [signals, setSignals] = useState<any[]>([])
 
@@ -11,6 +49,7 @@ export default function PerformancePage() {
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load()
     const channel = supabase.channel('performance-live')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'signals' }, load)
@@ -22,6 +61,7 @@ export default function PerformancePage() {
   const wins = closed.filter(s => s.final_outcome && s.final_outcome !== 'stopped_out').length
   const losses = closed.length - wins
   const successRate = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : null
+  const netPoints = closed.reduce((sum, s) => sum + netPointsForSignal(s), 0)
 
   const byTier = [
     { label: 'Precision entries', group: closed.filter(s => s.signal_type === 'precision') },
@@ -59,6 +99,14 @@ export default function PerformancePage() {
     return { label: tp.label, count: tracked.length, pct: tracked.length ? Math.round((hit / tracked.length) * 100) : null }
   })
 
+  const bySession = SESSION_BOUNDS.map(s => {
+    const group = closed.filter(sig => sessionForDate(sig.created_at) === s.name)
+    const sWins = group.filter(sig => sig.final_outcome && sig.final_outcome !== 'stopped_out').length
+    const winPct = group.length ? Math.round((sWins / group.length) * 100) : 0
+    const lossPct = group.length ? 100 - winPct : 0
+    return { name: s.name, count: group.length, winPct, lossPct }
+  })
+
   return (
     <div className="p-6 md:p-8">
       <div className="mb-6">
@@ -81,7 +129,12 @@ export default function PerformancePage() {
         <div className="flex gap-8 font-mono text-sm">
           <div className="text-center"><div className="text-[#34D399] text-xl font-bold">{wins}</div><div className="text-[9px] text-[#7C8896] uppercase mt-1">Wins</div></div>
           <div className="text-center"><div className="text-[#F87171] text-xl font-bold">{losses}</div><div className="text-[9px] text-[#7C8896] uppercase mt-1">Losses</div></div>
-          <div className="text-center"><div className="text-white text-xl font-bold">—</div><div className="text-[9px] text-[#7C8896] uppercase mt-1">Net Points</div></div>
+          <div className="text-center">
+            <div className={`text-xl font-bold ${netPoints > 0 ? 'text-[#34D399]' : netPoints < 0 ? 'text-[#F87171]' : 'text-white'}`}>
+              {closed.length === 0 ? '—' : (netPoints > 0 ? '+' : '') + netPoints}
+            </div>
+            <div className="text-[9px] text-[#7C8896] uppercase mt-1">Net Points</div>
+          </div>
         </div>
       </div>
 
@@ -102,14 +155,14 @@ export default function PerformancePage() {
 
         <div className="bg-[#0B0F14] border border-[#1B232C] rounded-xl p-6">
           <div className="font-mono text-[11px] tracking-widest text-[#7C8896] uppercase mb-4">By Session</div>
-          {['Asian','London','New York'].map((s, i) => (
+          {bySession.map((s, i) => (
             <div key={i} className="flex items-center gap-3 mb-3 font-mono text-xs">
-              <span className="w-16 text-[#7C8896]">{s.toUpperCase()}</span>
+              <span className="w-16 text-[#7C8896]">{s.name.toUpperCase()}</span>
               <div className="flex-1 h-3.5 bg-[#0F141A] rounded overflow-hidden flex">
-                <div className="h-full bg-[#34D399]" style={{ width: '0%' }} />
-                <div className="h-full bg-[#F87171]" style={{ width: '0%' }} />
+                <div className="h-full bg-[#34D399]" style={{ width: `${s.winPct}%` }} />
+                <div className="h-full bg-[#F87171]" style={{ width: `${s.lossPct}%` }} />
               </div>
-              <span className="w-10 text-right text-[#7C8896]">—</span>
+              <span className="w-16 text-right text-[#7C8896]">{s.count ? `${s.winPct}% · ${s.count}` : '—'}</span>
             </div>
           ))}
         </div>

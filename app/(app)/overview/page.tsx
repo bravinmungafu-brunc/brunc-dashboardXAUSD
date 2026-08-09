@@ -12,19 +12,46 @@ const TIMEFRAMES = [
   { key: '12M', label: 'Year' },
 ]
 
+const POINT_SIZE = 0.01
+function pointsBetween(a: number, b: number) {
+  return Math.round(Math.abs(a - b) / POINT_SIZE)
+}
+function netPointsForSignal(sig: any): number {
+  const entry = sig.entry
+  const exits = sig.exits || {}
+  if (entry == null) return 0
+  if (sig.final_outcome === 'stopped_out' && exits.sl != null) {
+    return -pointsBetween(entry, exits.sl)
+  }
+  if (sig.final_outcome === 'tp_hit') {
+    const exitPrice = sig.tp3_hit ? exits.tp3 : sig.tp2_hit ? exits.tp2 : sig.tp1_hit ? exits.tp1 : null
+    if (exitPrice != null) return pointsBetween(entry, exitPrice)
+  }
+  return 0
+}
+
 export default function OverviewPage() {
   const [latestStates, setLatestStates] = useState<any[]>([])
   const [selectedTf, setSelectedTf] = useState('15')
-  const [stats, setStats] = useState<{ open: number; today: number; successRate: string | null; net: number }>({ open: 0, today: 0, successRate: null, net: 0 })
+  const [stats, setStats] = useState<{ open: number; today: number; successRate: string | null; net: number | null }>({ open: 0, today: 0, successRate: null, net: null })
 
   const load = useCallback(async () => {
     const { data: states } = await supabase.from('tf_states').select('*').order('bar_time', { ascending: false }).limit(8)
     setLatestStates(states || [])
 
     const { data: openSignals } = await supabase.from('signals').select('id').eq('status', 'open')
-    const { data: resolved } = await supabase.from('signals').select('final_outcome').eq('status', 'closed')
+
+    const thirtyDaysAgo = new Date(); thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+    const { data: resolved } = await supabase
+      .from('signals')
+      .select('final_outcome,entry,exits,tp1_hit,tp2_hit,tp3_hit,created_at')
+      .eq('status', 'closed')
+      .gte('created_at', thirtyDaysAgo.toISOString())
+
     const wins = (resolved || []).filter((s: any) => s.final_outcome && s.final_outcome !== 'stopped_out').length
     const total = (resolved || []).length
+    const netPoints = (resolved || []).reduce((sum: number, s: any) => sum + netPointsForSignal(s), 0)
+
     const todayStart = new Date(); todayStart.setHours(0,0,0,0)
     const { data: todaySignals } = await supabase.from('signals').select('id').gte('created_at', todayStart.toISOString())
 
@@ -32,11 +59,12 @@ export default function OverviewPage() {
       open: openSignals?.length || 0,
       today: todaySignals?.length || 0,
       successRate: total > 0 ? ((wins / total) * 100).toFixed(1) : null,
-      net: 0
+      net: total > 0 ? netPoints : null,
     })
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load()
     const channel = supabase.channel('overview-live')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'signals' }, load)
@@ -145,7 +173,11 @@ export default function OverviewPage() {
           { label: 'Open Signals', value: stats.open, color: 'text-white' },
           { label: "Today's Signals", value: stats.today, color: 'text-white' },
           { label: 'Success Rate', value: stats.successRate !== null ? stats.successRate + '%' : '—', color: 'text-[#34D399]' },
-          { label: 'Net Points (30d)', value: '—', color: 'text-[#2DD4BF]' },
+          {
+            label: 'Net Points (30d)',
+            value: stats.net === null ? '—' : (stats.net > 0 ? '+' : '') + stats.net,
+            color: stats.net === null ? 'text-white' : stats.net > 0 ? 'text-[#34D399]' : stats.net < 0 ? 'text-[#F87171]' : 'text-white'
+          },
         ].map((c, i) => (
           <div key={i} className="bg-[#0B0F14] border border-[#1B232C] rounded-xl p-5">
             <div className="font-mono text-[10px] tracking-widest text-[#7C8896] uppercase mb-2">{c.label}</div>
