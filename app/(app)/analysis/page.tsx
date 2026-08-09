@@ -147,7 +147,7 @@ export default function AnalysisPage() {
       {!assessments && !loading && !error && (
         <div className="bg-[#0D1218] border border-[#1C2530] border-dashed rounded-2xl p-10 text-center">
           <div className="mono text-[11px] text-[#7C8896]">
-            Click "Run AI Analysis" to generate per-signal insights from open signals and current market context.
+            Click &quot;Run AI Analysis&quot; to generate per-signal insights from open signals and current market context.
           </div>
         </div>
       )}
@@ -204,7 +204,7 @@ export default function AnalysisPage() {
         {!resolveResult && !resolving && !resolveError && (
           <div className="bg-[#0D1218] border border-[#1C2530] border-dashed rounded-2xl p-10 text-center">
             <div className="mono text-[11px] text-[#7C8896]">
-              Click "ANALYSE" to pull live market data from Alpha Vantage and mark each closed-window signal as a win or loss. Results feed the Performance page.
+              Click &quot;ANALYSE&quot; to pull live market data from Alpha Vantage and mark each closed-window signal as a win or loss. Results feed the Performance page.
             </div>
           </div>
         )}
