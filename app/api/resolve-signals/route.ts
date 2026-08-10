@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL as string,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string
+  process.env.SUPABASE_SERVICE_KEY as string
 )
 
 const AV_KEY = process.env.ALPHAVANTAGE_API_KEY
@@ -11,10 +11,8 @@ async function fetchSpotPrice(): Promise<{ price: number | null; timestamp: stri
   const url = `https://www.alphavantage.co/query?function=GOLD_SILVER_SPOT&symbol=XAU&apikey=${AV_KEY}`
   const res = await fetch(url)
   const data = await res.json()
-
   const price = data?.price != null ? parseFloat(data.price) : null
   const timestamp = data?.timestamp ?? null
-
   return { price, timestamp, raw: data }
 }
 
@@ -40,8 +38,6 @@ function resolveAgainstSpot(signal: any, spot: number) {
   }
 
   const anyTpHit = tp1Hit || tp2Hit || tp3Hit
-  // Snapshot-based, not history-based: if price is currently past SL, we call it stopped out
-  // even if it touched a TP first — free tier can't see what happened in between checks.
   const outcome = !slHit && !anyTpHit ? 'still_open' : slHit ? 'stopped_out' : 'tp_hit'
   return { slHit, tp1Hit, tp2Hit, tp3Hit, outcome, resolved: outcome !== 'still_open' }
 }
@@ -64,10 +60,7 @@ export async function POST() {
 
   const { price: spot, timestamp, raw } = await fetchSpotPrice()
   if (spot == null) {
-    return Response.json({
-      error: 'Could not read a price from the Alpha Vantage response.',
-      raw,
-    })
+    return Response.json({ error: 'Could not read a price from the Alpha Vantage response.', raw })
   }
 
   const updates: any[] = []

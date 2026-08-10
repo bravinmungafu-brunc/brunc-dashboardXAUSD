@@ -3,26 +3,17 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Sidebar from '@/components/Sidebar'
 import Topbar from '@/components/Topbar'
-import { supabase } from '@/lib/supabaseClient'
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false)
   const router = useRouter()
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) {
-        router.replace('/login')
-      } else {
-        setReady(true)
-      }
-    })
-
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) router.replace('/login')
-    })
-
-    return () => listener.subscription.unsubscribe()
+    if (!localStorage.getItem('brunc_auth')) {
+      router.replace('/login')
+    } else {
+      setReady(true)
+    }
   }, [router])
 
   if (!ready) {
@@ -42,7 +33,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <Sidebar />
       <div className="flex-1 flex flex-col min-w-0">
         <Topbar />
-        <main className="flex-1 overflow-auto">
+        <main className="flex-1 overflow-auto pb-20 md:pb-0">
           {children}
         </main>
       </div>

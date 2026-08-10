@@ -2,6 +2,11 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 
+const POINT_SIZE = 0.01
+function pointsBetween(a: number, b: number) {
+  return Math.round(Math.abs(a - b) / POINT_SIZE)
+}
+
 function getExits(sig: any) {
   const sl = sig.exits?.sl ?? sig.stop_loss ?? null
   const tp1 = sig.exits?.tp1 ?? null
@@ -13,10 +18,10 @@ function getExits(sig: any) {
 
 function computeRR(entry: number | null, sl: number | null, tp1: number | null) {
   if (entry == null || sl == null || tp1 == null) return { riskPoints: null, rewardPoints: null, rr: null }
-  const riskPoints = Math.abs(entry - sl)
-  const rewardPoints = Math.abs(tp1 - entry)
+  const riskPoints = pointsBetween(entry, sl)
+  const rewardPoints = pointsBetween(entry, tp1)
   const rr = riskPoints > 0 ? (rewardPoints / riskPoints).toFixed(2) : null
-  return { riskPoints: riskPoints.toFixed(2), rewardPoints: rewardPoints.toFixed(2), rr }
+  return { riskPoints, rewardPoints, rr }
 }
 
 export default function SignalsPage() {
@@ -40,10 +45,10 @@ export default function SignalsPage() {
   const filtered = signals.filter(s => {
     if (filter === 'all') return true
     if (filter === 'sniper_confirmation') return s.signal_type === 'sniper_confirmation'
+    if (filter === 'precision') return s.signal_type === 'precision'
+    if (filter === 'fade') return s.signal_type === 'sniper_fade'
     if (filter === 'open') return s.status === 'open'
     if (filter === 'closed') return s.status === 'closed'
-    if (filter === 'precision') return s.tier === 1
-    if (filter === 'fade') return s.tier === 2 || s.tier === 3
     return true
   })
 
