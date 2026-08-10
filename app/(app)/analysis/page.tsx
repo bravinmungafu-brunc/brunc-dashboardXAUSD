@@ -3,10 +3,12 @@ import { useState } from 'react'
 
 function getSession() {
   const h = new Date().getUTCHours()
-  if (h >= 0 && h < 7) return { name: 'Asian', hours: '00:00–07:00' }
-  if (h >= 7 && h < 13) return { name: 'London', hours: '07:00–13:00' }
-  if (h >= 13 && h < 22) return { name: 'New York', hours: '13:00–22:00' }
-  return { name: 'Overlap', hours: '22:00–00:00' }
+  const isLondon = h >= 8 && h < 17
+  const isNewYork = h >= 13 && h < 22
+  if (isLondon && isNewYork) return { name: 'London/NY Overlap', hours: '13:00–17:00' }
+  if (isLondon) return { name: 'London', hours: '08:00–17:00' }
+  if (isNewYork) return { name: 'New York', hours: '13:00–22:00' }
+  return { name: 'Asian', hours: '22:00–08:00' }
 }
 
 type Assessment = {

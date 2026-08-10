@@ -17,8 +17,7 @@ function getExits(sig: any) {
 }
 
 // Prefers Pine's own computed risk object (authoritative) over client-side
-// recomputation — fixes cases where mismatched legacy data produced
-// nonsensical R:R values.
+// recomputation.
 function getRiskReward(sig: any, entry: number | null, sl: number | null, tp1: number | null) {
   if (sig.risk?.sl_distance != null && sig.risk?.tp1_distance != null) {
     return {
@@ -72,18 +71,12 @@ export default function SignalsPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'signals' }, fetchSignals)
       .subscribe()
 
-    // Best-effort background resolution so open signals don't sit stale —
-    // only runs while this page is open; for always-on resolution, an
-    // external cron pinging /api/resolve-signals is the next step.
-    fetch('/api/resolve-signals', { method: 'POST' }).catch(() => {})
-    const resolveInterval = setInterval(() => {
-      fetch('/api/resolve-signals', { method: 'POST' }).catch(() => {})
-    }, 3 * 60 * 1000)
+    // No client-side resolve polling here — resolution runs on a fixed
+    // hourly external cron (24 calls/day) plus the manual ANALYSE button
+    // (1 reserved call), keeping total usage at or under Alpha Vantage's
+    // free-tier 25 requests/day cap regardless of how many tabs are open.
 
-    return () => {
-      supabase.removeChannel(channel)
-      clearInterval(resolveInterval)
-    }
+    return () => { supabase.removeChannel(channel) }
   }, [])
 
   const filtered = signals.filter(s => {
@@ -124,9 +117,11 @@ export default function SignalsPage() {
             const tierLabel = TYPE_LABEL[sig.signal_type] || sig.signal_type?.toUpperCase() || '—'
             const gradeValue = sig.grade?.value ?? null
             const gradeOf = sig.grade?.of ?? null
+            const isClosed = sig.status === 'closed'
+            const isWin = sig.final_outcome === 'tp_hit'
 
             return (
-              <div key={sig.id} className="bg-[#0B0F14] border-l-2 border-l-[#2DD4BF] border-y border-r border-[#1B232C] rounded-xl p-5">
+              <div key={sig.id} className={`bg-[#0B0F14] border-l-2 ${isClosed ? (isWin ? 'border-l-[#2B8CE0]' : 'border-l-[#F87171]') : 'border-l-[#2DD4BF]'} border-y border-r border-[#1B232C] rounded-xl p-5`}>
                 <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
                   <span className="font-bold text-white text-base flex items-center gap-2 flex-wrap">
                     {(sig.direction === 'long' || sig.direction === 'buy') ? <span className="text-[#34D399]">▲</span> : <span className="text-[#F87171]">▼</span>}
@@ -143,8 +138,10 @@ export default function SignalsPage() {
                   </span>
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-[10px] text-[#7C8896]">{formatKenyaTime(sig.created_at)}</span>
-                    <span className={`font-mono text-[10px] px-2.5 py-1 rounded ${sig.status === 'open' ? 'bg-[#14625A]/30 text-[#2DD4BF]' : 'bg-[#34D399]/15 text-[#34D399]'}`}>
-                      {sig.status === 'open' ? 'OPEN' : (sig.final_outcome || 'CLOSED').toUpperCase()}
+                    <span className={`font-mono text-[10px] px-2.5 py-1 rounded ${
+                      !isClosed ? 'bg-[#14625A]/30 text-[#2DD4BF]' : isWin ? 'bg-[#2B8CE0]/15 text-[#2B8CE0]' : 'bg-[#F87171]/15 text-[#F87171]'
+                    }`}>
+                      {!isClosed ? 'OPEN' : (sig.final_outcome || 'CLOSED').replace(/_/g, ' ').toUpperCase()}
                     </span>
                   </div>
                 </div>
@@ -159,15 +156,24 @@ export default function SignalsPage() {
                     <div className="text-white font-mono text-sm">{entry ?? '—'}</div>
                   </div>
                   <div className="bg-[#0F141A] rounded-lg p-2.5">
-                    <div className="text-[9px] text-[#7C8896] uppercase tracking-wide mb-1 font-mono">TP1 <span className="text-[#3A434D]">· 15min</span></div>
+                    <div className="text-[9px] text-[#7C8896] uppercase tracking-wide mb-1 font-mono">
+                      TP1 <span className="text-[#3A434D]">· 15min</span>
+                      {sig.tp1_hit && <span className="text-[#2B8CE0]"> ✓</span>}
+                    </div>
                     <div className="text-[#34D399] font-mono text-sm">{tp1 ?? '—'}</div>
                   </div>
                   <div className="bg-[#0F141A] rounded-lg p-2.5">
-                    <div className="text-[9px] text-[#7C8896] uppercase tracking-wide mb-1 font-mono">TP2 <span className="text-[#3A434D]">· 1H</span></div>
+                    <div className="text-[9px] text-[#7C8896] uppercase tracking-wide mb-1 font-mono">
+                      TP2 <span className="text-[#3A434D]">· 1H</span>
+                      {sig.tp2_hit && <span className="text-[#2B8CE0]"> ✓</span>}
+                    </div>
                     <div className="text-[#34D399] font-mono text-sm">{tp2 ?? '—'}</div>
                   </div>
                   <div className="bg-[#0F141A] rounded-lg p-2.5">
-                    <div className="text-[9px] text-[#7C8896] uppercase tracking-wide mb-1 font-mono">TP3 <span className="text-[#3A434D]">· 4H</span></div>
+                    <div className="text-[9px] text-[#7C8896] uppercase tracking-wide mb-1 font-mono">
+                      TP3 <span className="text-[#3A434D]">· 4H</span>
+                      {sig.tp3_hit && <span className="text-[#2B8CE0]"> ✓</span>}
+                    </div>
                     <div className="text-[#34D399] font-mono text-sm">{tp3 ?? '—'}</div>
                   </div>
                 </div>
