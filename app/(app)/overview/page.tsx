@@ -31,13 +31,22 @@ function netPointsForSignal(sig: any): number {
 }
 
 export default function OverviewPage() {
-  const [latestStates, setLatestStates] = useState<any[]>([])
+  // Sourced from the most recent signal's htf_confluence array — Pine's
+  // current schema embeds per-timeframe state in each signal rather than
+  // sending separate box-state pings, so this is the live accurate source.
+  const [confluence, setConfluence] = useState<any[]>([])
   const [selectedTf, setSelectedTf] = useState('15')
   const [stats, setStats] = useState<{ open: number; today: number; successRate: string | null; net: number | null }>({ open: 0, today: 0, successRate: null, net: null })
 
   const load = useCallback(async () => {
-    const { data: states } = await supabase.from('tf_states').select('*').order('bar_time', { ascending: false }).limit(8)
-    setLatestStates(states || [])
+    const { data: latestSignal } = await supabase
+      .from('signals')
+      .select('htf_confluence')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    setConfluence(latestSignal?.htf_confluence || [])
 
     const { data: openSignals } = await supabase.from('signals').select('id').eq('status', 'open')
 
@@ -68,14 +77,14 @@ export default function OverviewPage() {
     load()
     const channel = supabase.channel('overview-live')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'signals' }, load)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tf_states' }, load)
       .subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [load])
 
-  const selectedState = latestStates.find(s => s.timeframe === selectedTf)
-  const isBullish = selectedState?.state === 1
-  const hasData = !!selectedState
+  const selectedState = confluence.find((c: any) => c.tf === selectedTf)
+  const rawState = selectedState?.state // 'bullish' | 'bearish' | 'pending' | undefined
+  const hasData = rawState === 'bullish' || rawState === 'bearish'
+  const isBullish = rawState === 'bullish'
   const gaugeColor = !hasData ? '#3A434D' : isBullish ? '#34D399' : '#F87171'
   const gaugeDash = hasData ? '465 0' : '0 465'
 
@@ -105,7 +114,7 @@ export default function OverviewPage() {
             </svg>
             <div className="text-center -mt-[110px] mb-[80px]">
               <div className="text-lg font-bold tracking-wide" style={{ color: gaugeColor }}>
-                {!hasData ? '—' : isBullish ? 'BULLISH' : 'BEARISH'}
+                {rawState === 'pending' ? 'PENDING' : !hasData ? '—' : isBullish ? 'BULLISH' : 'BEARISH'}
               </div>
               <div className="font-mono text-[10px] text-[#7C8896] mt-1">
                 {TIMEFRAMES.find(t => t.key === selectedTf)?.label} box-chain state
@@ -130,12 +139,16 @@ export default function OverviewPage() {
           </div>
 
           <div className="mt-4 bg-[#0F141A] border border-[#1B232C] rounded-lg p-3.5 font-mono text-[11px] text-[#7C8896] leading-relaxed">
-            {!hasData ? (
+            {!selectedState ? (
               <>No data yet for this timeframe — waiting on live signal feed.</>
             ) : (
               <>
-                <span style={{ color: gaugeColor }} className="font-semibold">{isBullish ? 'Bullish' : 'Bearish'}</span>
-                {' '}— current box-chain state on the {TIMEFRAMES.find(t => t.key === selectedTf)?.label} timeframe.
+                <span style={{ color: gaugeColor }} className="font-semibold">
+                  {rawState === 'pending' ? 'Pending' : isBullish ? 'Bullish' : 'Bearish'}
+                </span>
+                {' '}— current box-chain state on the {TIMEFRAMES.find(t => t.key === selectedTf)?.label} timeframe
+                {selectedState.fade_active ? ', fade active' : ''}
+                {selectedState.rejections ? `, ${selectedState.rejections} rejection(s)` : ''}.
               </>
             )}
           </div>
@@ -143,28 +156,25 @@ export default function OverviewPage() {
 
         <div className="bg-[#0B0F14] border border-[#1B232C] rounded-xl p-6">
           <div className="font-mono text-[11px] tracking-widest text-[#7C8896] uppercase mb-4">Timeframe Boxes — box-chain state</div>
-          {latestStates.length === 0 ? (
+          {confluence.length === 0 ? (
             <div className="text-[#7C8896] font-mono text-sm">No data yet — waiting on live signal feed.</div>
           ) : (
             <div className="grid grid-cols-2 gap-3">
-              {latestStates.map(s => (
-                <div key={s.id} className="bg-[#0F141A] border border-[#1B232C] rounded-lg p-3">
-                  <div className="font-mono text-[10px] text-[#7C8896] uppercase tracking-wide mb-1">{s.timeframe}</div>
-                  <div className={`font-mono text-sm font-semibold ${s.state === 1 ? 'text-[#34D399]' : 'text-[#F87171]'}`}>
-                    {s.state === 1 ? 'BULLISH' : 'BEARISH'}
+              {TIMEFRAMES.map(tf => {
+                const c = confluence.find((x: any) => x.tf === tf.key)
+                const st = c?.state
+                return (
+                  <div key={tf.key} className="bg-[#0F141A] border border-[#1B232C] rounded-lg p-3">
+                    <div className="font-mono text-[10px] text-[#7C8896] uppercase tracking-wide mb-1">{tf.label}</div>
+                    <div className={`font-mono text-sm font-semibold ${st === 'bullish' ? 'text-[#34D399]' : st === 'bearish' ? 'text-[#F87171]' : 'text-[#7C8896]'}`}>
+                      {st === 'bullish' ? 'BULLISH' : st === 'bearish' ? 'BEARISH' : st === 'pending' ? 'PENDING' : '—'}
+                    </div>
+                    {c?.fade_active && <div className="font-mono text-[9px] text-[#2DD4BF] mt-0.5">FADE ACTIVE</div>}
                   </div>
-                  {s.event && <div className="font-mono text-[9px] text-[#2DD4BF] mt-0.5">{s.event}</div>}
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
-          <div className="mt-4 bg-[#14625A]/20 border border-[#14625A] rounded-lg p-4 flex justify-between items-center">
-            <div>
-              <div className="font-mono text-[11px] text-[#2DD4BF] font-semibold uppercase">Window</div>
-              <div className="font-mono text-[11px] text-[#7C8896] mt-1">Exec close breaching a higher-TF box in trade direction</div>
-            </div>
-            <span className="font-mono text-[10px] border border-[#2DD4BF] text-[#2DD4BF] px-3 py-1 rounded">—</span>
-          </div>
         </div>
       </div>
 

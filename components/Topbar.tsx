@@ -4,20 +4,37 @@ import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 
 function getSession() {
-  const hour = new Date().getUTCHours()
-  if (hour >= 0 && hour < 7) return 'ASIAN'
-  if (hour >= 7 && hour < 13) return 'LONDON'
-  if (hour >= 13 && hour < 22) return 'NEW YORK'
-  return 'OVERLAP'
+  const h = new Date().getUTCHours()
+  const isAsian = h >= 22 || h < 8
+  const isLondon = h >= 8 && h < 17
+  const isNewYork = h >= 13 && h < 22
+  if (isLondon && isNewYork) return 'LONDON/NY OVERLAP'
+  if (isLondon) return 'LONDON'
+  if (isNewYork) return 'NEW YORK'
+  return 'ASIAN'
+}
+
+function getKenyaTime() {
+  return new Intl.DateTimeFormat('en-KE', {
+    timeZone: 'Africa/Nairobi',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(new Date())
 }
 
 export default function Topbar() {
   const [session, setSession] = useState('—')
+  const [eatTime, setEatTime] = useState('—')
   const router = useRouter()
 
   useEffect(() => {
     setSession(getSession())
-    const interval = setInterval(() => setSession(getSession()), 60000)
+    setEatTime(getKenyaTime())
+    const interval = setInterval(() => {
+      setSession(getSession())
+      setEatTime(getKenyaTime())
+    }, 30000)
     return () => clearInterval(interval)
   }, [])
 
@@ -34,8 +51,7 @@ export default function Topbar() {
           <span className="w-1.5 h-1.5 rounded-full bg-[#34D399] animate-pulse" /> XAUUSD
         </span>
         <span className="text-white flex-shrink-0">— live price pending</span>
-        <span className="text-[#7C8896] hidden sm:inline flex-shrink-0">15m box —</span>
-        <span className="text-[#7C8896] hidden sm:inline flex-shrink-0">1H bias —</span>
+        <span className="text-[#7C8896] hidden sm:inline flex-shrink-0">{eatTime} EAT</span>
         <span className="ml-auto border border-[#1B232C] rounded px-2 md:px-2.5 py-1 text-[#2DD4BF] flex-shrink-0">
           <span className="hidden md:inline">SESSION: </span>{session}
         </span>
