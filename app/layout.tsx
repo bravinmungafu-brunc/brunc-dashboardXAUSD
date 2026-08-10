@@ -1,22 +1,53 @@
-import './globals.css'
-import type { Metadata } from 'next'
+'use client'
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import Sidebar from '@/components/Sidebar'
+import Topbar from '@/components/Topbar'
+import { supabase } from '@/lib/supabaseClient'
 
-export const metadata: Metadata = {
-  title: 'BRUNC AI — Sniper Signal Desk',
-  description: 'XAUUSD Signal Intelligence · PO3/CRT Engine',
-}
+export default function AppLayout({ children }: { children: React.ReactNode }) {
+  const [ready, setReady] = useState(false)
+  const router = useRouter()
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) {
+        router.replace('/login')
+      } else {
+        setReady(true)
+      }
+    })
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) {
+        router.replace('/login')
+      }
+    })
+
+    return () => { listener.subscription.unsubscribe() }
+  }, [router])
+
+  if (!ready) {
+    return (
+      <div className="min-h-screen bg-[#05070A] flex items-center justify-center">
+        <div className="mono text-[#7C8896] text-xs flex items-center gap-2">
+          <span className="w-3 h-3 border-2 border-[#2B8CE0]/30 border-t-[#2B8CE0] rounded-full inline-block" style={{ animation: 'spin 0.6s linear infinite' }} />
+          Loading…
+        </div>
+        <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      </div>
+    )
+  }
+
   return (
-    <html lang="en">
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
-          rel="stylesheet"
-        />
-      </head>
-      <body>{children}</body>
-    </html>
+    <div className="flex min-h-screen bg-[#05070A]">
+      <Sidebar />
+      <div className="flex-1 flex flex-col min-w-0">
+        <Topbar />
+        <main className="flex-1 overflow-auto pb-20 md:pb-0">
+          {children}
+        </main>
+      </div>
+    </div>
   )
 }
