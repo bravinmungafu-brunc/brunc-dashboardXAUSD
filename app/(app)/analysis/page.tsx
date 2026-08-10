@@ -76,6 +76,10 @@ export default function AnalysisPage() {
     setResolving(false)
   }
 
+  const updates: any[] = resolveResult?.updates || []
+  const successfulCount = updates.filter(u => u.outcome === 'tp_hit').length
+  const unsuccessfulCount = updates.filter(u => u.outcome === 'stopped_out').length
+
   return (
     <div className="p-6 md:p-8 max-w-3xl fade-up">
       <div className="mb-7">
@@ -208,19 +212,47 @@ export default function AnalysisPage() {
             <div className="flex items-center gap-2 mb-4 pb-4 border-b border-[#1C2530]">
               <span className="mono text-[10px] text-[#2DD4BF] tracking-widest uppercase">Resolution Summary</span>
             </div>
-            <div className="grid grid-cols-3 gap-4 mono text-sm text-[#EDEFF2] mb-3">
-              <div><span className="text-[#7C8896]">Checked:</span> {resolveResult.checked ?? '—'}</div>
-              <div><span className="text-[#34D399]">Resolved:</span> {resolveResult.resolved ?? '—'}</div>
-              <div><span className="text-[#7C8896]">Still open:</span> {resolveResult.stillOpen ?? '—'}</div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+              <div>
+                <div className="mono text-[9px] text-[#7C8896] uppercase tracking-wide mb-1">Successful</div>
+                <div className="text-2xl font-bold text-[#2B8CE0]">{successfulCount}</div>
+              </div>
+              <div>
+                <div className="mono text-[9px] text-[#7C8896] uppercase tracking-wide mb-1">Unsuccessful</div>
+                <div className="text-2xl font-bold text-[#F87171]">{unsuccessfulCount}</div>
+              </div>
+              <div>
+                <div className="mono text-[9px] text-[#7C8896] uppercase tracking-wide mb-1">Closed</div>
+                <div className="text-2xl font-bold text-white">{resolveResult.resolved ?? 0}</div>
+              </div>
+              <div>
+                <div className="mono text-[9px] text-[#7C8896] uppercase tracking-wide mb-1">Open</div>
+                <div className="text-2xl font-bold text-[#7C8896]">{resolveResult.stillOpen ?? 0}</div>
+              </div>
             </div>
-            {Array.isArray(resolveResult.updates) && resolveResult.updates.length > 0 && (
-              <div className="mt-3 space-y-1.5">
-                {resolveResult.updates.map((u: any, i: number) => (
-                  <div key={i} className="font-mono text-[11px] text-[#7C8896] flex justify-between border-t border-[#1C2530] pt-1.5">
-                    <span>{u.signal_id}</span>
-                    <span className={u.outcome === 'stopped_out' ? 'text-[#F87171]' : 'text-[#2B8CE0]'}>{u.outcome}</span>
+
+            {updates.length > 0 ? (
+              <div className="space-y-1.5 pt-3 border-t border-[#1C2530]">
+                {updates.map((u: any, i: number) => (
+                  <div key={i} className="font-mono text-[11px] flex justify-between items-center py-1">
+                    <span className="text-[#EDEFF2]">{u.signal_id}</span>
+                    <span
+                      className={`px-2 py-0.5 rounded ${
+                        u.outcome === 'tp_hit'
+                          ? 'text-[#2B8CE0] bg-[#2B8CE0]/10'
+                          : u.outcome === 'stopped_out'
+                          ? 'text-[#F87171] bg-[#F87171]/10'
+                          : 'text-[#7C8896]'
+                      }`}
+                    >
+                      {u.outcome === 'tp_hit' ? 'SUCCESSFUL' : u.outcome === 'stopped_out' ? 'UNSUCCESSFUL' : u.outcome}
+                    </span>
                   </div>
                 ))}
+              </div>
+            ) : (
+              <div className="mono text-[11px] text-[#7C8896] pt-3 border-t border-[#1C2530]">
+                No signals closed on this run — all remaining open signals haven&apos;t hit SL or TP yet at the current price.
               </div>
             )}
           </div>
