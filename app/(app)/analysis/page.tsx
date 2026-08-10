@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 function getSession() {
   const h = new Date().getUTCHours()
@@ -34,6 +34,16 @@ export default function AnalysisPage() {
   const [resolving, setResolving] = useState(false)
   const [resolveError, setResolveError] = useState('')
   const [resolveResult, setResolveResult] = useState<any>(null)
+  const [quota, setQuota] = useState<{ used: number; limit: number } | null>(null)
+
+  useEffect(() => {
+    fetch('/api/resolve-signals')
+      .then(r => r.json())
+      .then(d => { if (d.used != null) setQuota({ used: d.used, limit: d.limit }) })
+      .catch(() => {})
+  }, [])
+
+  const quotaExhausted = quota != null && quota.used >= quota.limit
 
   async function runAnalysis() {
     setLoading(true)
@@ -57,6 +67,7 @@ export default function AnalysisPage() {
     try {
       const res = await fetch('/api/resolve-signals', { method: 'POST' })
       const data = await res.json()
+      if (data.used != null) setQuota({ used: data.used, limit: data.limit })
       if (data.error) setResolveError(data.error)
       else setResolveResult(data)
     } catch {
@@ -155,33 +166,45 @@ export default function AnalysisPage() {
       )}
 
       <div className="mt-10 pt-8 border-t border-[#1C2530]">
-        <div className="mb-5">
-          <div className="mono text-[10px] tracking-[0.3em] text-[#2DD4BF] uppercase mb-1">Outcome Resolution</div>
-          <h2 className="text-xl font-bold text-white">
-            Closed Signal Analysis <span className="text-[#7C8896] font-normal text-sm ml-2">— compares logged signals against live market data</span>
-          </h2>
+        <div className="mb-5 flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <div className="mono text-[10px] tracking-[0.3em] text-[#2DD4BF] uppercase mb-1">Outcome Resolution</div>
+            <h2 className="text-xl font-bold text-white">
+              Closed Signal Analysis <span className="text-[#7C8896] font-normal text-sm ml-2">— compares logged signals against live market data</span>
+            </h2>
+          </div>
+          {quota && (
+            <span className="mono text-[10px] text-[#7C8896]">
+              Alpha Vantage: <span className={quotaExhausted ? 'text-[#F87171]' : 'text-[#2DD4BF]'}>{quota.used}/{quota.limit}</span> today
+            </span>
+          )}
         </div>
 
-        <button onClick={runCloseSignalAnalysis} disabled={resolving}
-          className="flex items-center gap-2.5 px-5 py-3 bg-[#2DD4BF] hover:bg-[#4ee0cc] disabled:opacity-50 text-[#05070A] font-semibold text-sm rounded-xl transition-all mb-5">
+        <button onClick={runCloseSignalAnalysis} disabled={resolving || quotaExhausted}
+          className="flex items-center gap-2.5 px-5 py-3 bg-[#2DD4BF] hover:bg-[#4ee0cc] disabled:opacity-40 text-[#05070A] font-semibold text-sm rounded-xl transition-all mb-2">
           {resolving ? (
             <>
               <span className="w-4 h-4 border-2 border-[#05070A]/30 border-t-[#05070A] rounded-full inline-block" style={{ animation: 'spin 0.7s linear infinite' }} />
               Analysing closed signals…
             </>
+          ) : quotaExhausted ? (
+            <>DAILY LIMIT REACHED</>
           ) : (
             <>ANALYSE</>
           )}
         </button>
+        {quotaExhausted && (
+          <div className="mono text-[10px] text-[#7C8896] mb-3">Resets at 00:00 UTC.</div>
+        )}
 
         {resolveError && (
-          <div className="bg-[#E5555A]/10 border border-[#E5555A]/25 rounded-2xl px-5 py-4 mono text-xs text-[#E5555A] mb-4">
+          <div className="bg-[#E5555A]/10 border border-[#E5555A]/25 rounded-2xl px-5 py-4 mono text-xs text-[#E5555A] mb-4 mt-3">
             {resolveError}
           </div>
         )}
 
         {resolveResult && (
-          <div className="bg-[#0D1218] border border-[#1C2530] rounded-2xl p-6 fade-up">
+          <div className="bg-[#0D1218] border border-[#1C2530] rounded-2xl p-6 fade-up mt-3">
             <div className="flex items-center gap-2 mb-4 pb-4 border-b border-[#1C2530]">
               <span className="mono text-[10px] text-[#2DD4BF] tracking-widest uppercase">Resolution Summary</span>
             </div>
@@ -204,7 +227,7 @@ export default function AnalysisPage() {
         )}
 
         {!resolveResult && !resolving && !resolveError && (
-          <div className="bg-[#0D1218] border border-[#1C2530] border-dashed rounded-2xl p-10 text-center">
+          <div className="bg-[#0D1218] border border-[#1C2530] border-dashed rounded-2xl p-10 text-center mt-3">
             <div className="mono text-[11px] text-[#7C8896]">
               Click &quot;ANALYSE&quot; to pull live market data from Alpha Vantage and mark each closed-window signal as a win or loss. Results feed the Performance page.
             </div>
