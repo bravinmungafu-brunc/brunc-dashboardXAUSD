@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL as string,
-  process.env.SUPABASE_SERVICE_KEY as string
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string
 )
 
 const AV_KEY = process.env.ALPHAVANTAGE_API_KEY
@@ -11,8 +11,10 @@ async function fetchSpotPrice(): Promise<{ price: number | null; timestamp: stri
   const url = `https://www.alphavantage.co/query?function=GOLD_SILVER_SPOT&symbol=XAU&apikey=${AV_KEY}`
   const res = await fetch(url)
   const data = await res.json()
+
   const price = data?.price != null ? parseFloat(data.price) : null
   const timestamp = data?.timestamp ?? null
+
   return { price, timestamp, raw: data }
 }
 
@@ -60,7 +62,10 @@ export async function POST() {
 
   const { price: spot, timestamp, raw } = await fetchSpotPrice()
   if (spot == null) {
-    return Response.json({ error: 'Could not read a price from the Alpha Vantage response.', raw })
+    return Response.json({
+      error: 'Could not read a price from the Alpha Vantage response.',
+      raw,
+    })
   }
 
   const updates: any[] = []
