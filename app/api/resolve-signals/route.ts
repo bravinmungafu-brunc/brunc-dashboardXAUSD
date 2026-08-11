@@ -23,7 +23,6 @@ async function incrementUsage(): Promise<number> {
   return next
 }
 
-// Lets the Analysis page check quota on load, without spending a call
 export async function GET() {
   const used = await getUsage()
   return Response.json({ used, limit: DAILY_LIMIT })
@@ -79,7 +78,6 @@ export async function POST() {
 
   const used = await getUsage()
 
-  // Nothing to check — skip the Alpha Vantage call entirely, don't spend quota
   if (!openSignals || openSignals.length === 0) {
     return Response.json({ checked: 0, resolved: 0, stillOpen: 0, updates: [], used, limit: DAILY_LIMIT })
   }
@@ -105,6 +103,7 @@ export async function POST() {
 
   for (const sig of openSignals) {
     const result = resolveAgainstSpot(sig, spot)
+
     if (result.resolved) {
       const { error: updateErr } = await supabase
         .from('signals')
@@ -118,11 +117,12 @@ export async function POST() {
         })
         .eq('id', sig.id)
 
-      if (!updateErr) {
-        resolvedCount++
-        updates.push({ signal_id: sig.signal_id ?? sig.id, outcome: result.outcome, spot })
-      }
+      if (!updateErr) resolvedCount++
     }
+
+    // Every checked signal gets an entry now — open, successful, or
+    // unsuccessful — not just the ones that closed on this run.
+    updates.push({ signal_id: sig.signal_id ?? sig.id, outcome: result.outcome, spot })
   }
 
   return Response.json({

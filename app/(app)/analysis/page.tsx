@@ -80,6 +80,12 @@ export default function AnalysisPage() {
   const successfulCount = updates.filter(u => u.outcome === 'tp_hit').length
   const unsuccessfulCount = updates.filter(u => u.outcome === 'stopped_out').length
 
+  function outcomeStyle(outcome: string) {
+    if (outcome === 'tp_hit') return { label: 'SUCCESSFUL', className: 'text-[#2B8CE0] bg-[#2B8CE0]/10' }
+    if (outcome === 'stopped_out') return { label: 'UNSUCCESSFUL', className: 'text-[#F87171] bg-[#F87171]/10' }
+    return { label: 'OPEN', className: 'text-[#7C8896] bg-[#7C8896]/10' }
+  }
+
   return (
     <div className="p-6 md:p-8 max-w-3xl fade-up">
       <div className="mb-7">
@@ -233,26 +239,19 @@ export default function AnalysisPage() {
 
             {updates.length > 0 ? (
               <div className="space-y-1.5 pt-3 border-t border-[#1C2530]">
-                {updates.map((u: any, i: number) => (
-                  <div key={i} className="font-mono text-[11px] flex justify-between items-center py-1">
-                    <span className="text-[#EDEFF2]">{u.signal_id}</span>
-                    <span
-                      className={`px-2 py-0.5 rounded ${
-                        u.outcome === 'tp_hit'
-                          ? 'text-[#2B8CE0] bg-[#2B8CE0]/10'
-                          : u.outcome === 'stopped_out'
-                          ? 'text-[#F87171] bg-[#F87171]/10'
-                          : 'text-[#7C8896]'
-                      }`}
-                    >
-                      {u.outcome === 'tp_hit' ? 'SUCCESSFUL' : u.outcome === 'stopped_out' ? 'UNSUCCESSFUL' : u.outcome}
-                    </span>
-                  </div>
-                ))}
+                {updates.map((u: any, i: number) => {
+                  const style = outcomeStyle(u.outcome)
+                  return (
+                    <div key={i} className="font-mono text-[11px] flex justify-between items-center py-1">
+                      <span className="text-[#EDEFF2]">{u.signal_id}</span>
+                      <span className={`px-2 py-0.5 rounded ${style.className}`}>{style.label}</span>
+                    </div>
+                  )
+                })}
               </div>
             ) : (
               <div className="mono text-[11px] text-[#7C8896] pt-3 border-t border-[#1C2530]">
-                No signals closed on this run — all remaining open signals haven&apos;t hit SL or TP yet at the current price.
+                No open signals were checked on this run.
               </div>
             )}
           </div>
