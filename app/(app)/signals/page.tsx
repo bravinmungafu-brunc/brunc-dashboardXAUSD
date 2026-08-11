@@ -16,14 +16,16 @@ function getExits(sig: any) {
   return { sl, tp1, tp2, tp3, entry }
 }
 
-// Prefers Pine's own computed risk object (authoritative) over client-side
-// recomputation.
+// Prefers Pine's own computed risk object. Math.abs() guards against
+// newer payloads sending a negative sl_distance for certain setups
+// (e.g. directional_ride) — distance is always displayed as a positive
+// magnitude regardless of the sign Pine sends.
 function getRiskReward(sig: any, entry: number | null, sl: number | null, tp1: number | null) {
   if (sig.risk?.sl_distance != null && sig.risk?.tp1_distance != null) {
     return {
-      riskPoints: Math.round(sig.risk.sl_distance / POINT_SIZE),
-      rewardPoints: Math.round(sig.risk.tp1_distance / POINT_SIZE),
-      rr: sig.risk.tp1_rr != null ? sig.risk.tp1_rr.toFixed(2) : null,
+      riskPoints: Math.round(Math.abs(sig.risk.sl_distance) / POINT_SIZE),
+      rewardPoints: Math.round(Math.abs(sig.risk.tp1_distance) / POINT_SIZE),
+      rr: sig.risk.tp1_rr != null ? Math.abs(sig.risk.tp1_rr).toFixed(2) : null,
     }
   }
   if (entry == null || sl == null || tp1 == null) return { riskPoints: null, rewardPoints: null, rr: null }
@@ -38,6 +40,7 @@ const TYPE_LABEL: Record<string, string> = {
   sniper_fade: 'FADE',
   sniper_confirmation: 'SNIPER CONFIRMATION',
   precision: 'PRECISION',
+  directional_ride: 'DIRECTIONAL RIDE',
 }
 
 function formatKenyaTime(iso: string) {
@@ -70,12 +73,6 @@ export default function SignalsPage() {
     const channel = supabase.channel('signals-feed')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'signals' }, fetchSignals)
       .subscribe()
-
-    // No client-side resolve polling here — resolution runs on a fixed
-    // hourly external cron (24 calls/day) plus the manual ANALYSE button
-    // (1 reserved call), keeping total usage at or under Alpha Vantage's
-    // free-tier 25 requests/day cap regardless of how many tabs are open.
-
     return () => { supabase.removeChannel(channel) }
   }, [])
 
@@ -84,6 +81,7 @@ export default function SignalsPage() {
     if (filter === 'sniper_confirmation') return s.signal_type === 'sniper_confirmation'
     if (filter === 'precision') return s.signal_type === 'precision'
     if (filter === 'fade') return s.signal_type === 'fade' || s.signal_type === 'sniper_fade'
+    if (filter === 'directional') return s.signal_type === 'directional_ride'
     if (filter === 'open') return s.status === 'open'
     if (filter === 'closed') return s.status === 'closed'
     return true
@@ -97,11 +95,11 @@ export default function SignalsPage() {
       </div>
 
       <div className="flex gap-2 mb-6 flex-wrap">
-        {['all','sniper_confirmation','precision','fade','open','closed'].map(f => (
+        {['all','sniper_confirmation','precision','fade','directional','open','closed'].map(f => (
           <button key={f} onClick={() => setFilter(f)}
             className={`font-mono text-[11px] uppercase tracking-wide px-4 py-1.5 rounded ${
               filter === f ? 'bg-[#14625A]/40 text-[#2DD4BF] border border-[#2DD4BF]' : 'border border-[#1B232C] text-[#7C8896]'
-            }`}>{f === 'sniper_confirmation' ? 'SNIPER CONFIRMATION' : f}</button>
+            }`}>{f === 'sniper_confirmation' ? 'SNIPER CONFIRMATION' : f === 'directional' ? 'DIRECTIONAL RIDE' : f}</button>
         ))}
       </div>
 
@@ -114,11 +112,12 @@ export default function SignalsPage() {
           {filtered.map(sig => {
             const { sl, tp1, tp2, tp3, entry } = getExits(sig)
             const { riskPoints, rewardPoints, rr } = getRiskReward(sig, entry, sl, tp1)
-            const tierLabel = TYPE_LABEL[sig.signal_type] || sig.signal_type?.toUpperCase() || '—'
+            const tierLabel = TYPE_LABEL[sig.signal_type] || sig.signal_type?.replace(/_/g, ' ').toUpperCase() || '—'
             const gradeValue = sig.grade?.value ?? null
             const gradeOf = sig.grade?.of ?? null
             const isClosed = sig.status === 'closed'
             const isWin = sig.final_outcome === 'tp_hit'
+            const regime = sig.regime
 
             return (
               <div key={sig.id} className={`bg-[#0B0F14] border-l-2 ${isClosed ? (isWin ? 'border-l-[#2B8CE0]' : 'border-l-[#F87171]') : 'border-l-[#2DD4BF]'} border-y border-r border-[#1B232C] rounded-xl p-5`}>
@@ -129,6 +128,16 @@ export default function SignalsPage() {
                     <span className="font-mono text-[10px] px-2 py-0.5 rounded border border-[#2DD4BF] text-[#2DD4BF]">{tierLabel}</span>
                     {sig.path && (
                       <span className="font-mono text-[10px] px-2 py-0.5 rounded border border-[#3A434D] text-[#3A434D]">{sig.path}</span>
+                    )}
+                    {sig.htf_rung && (
+                      <span className="font-mono text-[10px] px-2 py-0.5 rounded border border-[#3A434D] text-[#7C8896]">rung {sig.htf_rung}</span>
+                    )}
+                    {regime?.mode && (
+                      <span className={`font-mono text-[10px] px-2 py-0.5 rounded border ${
+                        regime.mode === 'directional' ? 'border-[#F5A623] text-[#F5A623]' : 'border-[#7C8896] text-[#7C8896]'
+                      }`}>
+                        {regime.mode}{regime.direction ? ` · ${regime.direction}` : ''}
+                      </span>
                     )}
                     {gradeValue !== null && (
                       <span className="font-mono text-[10px] px-2 py-0.5 rounded border border-[#7C8896] text-[#7C8896]">
