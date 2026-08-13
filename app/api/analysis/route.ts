@@ -1,19 +1,17 @@
 import { createClient } from '@supabase/supabase-js'
 
+// Service-role client -- same reasoning as resolve-signals: this route
+// writes ai_reviewed_at server-side and needs to bypass the anon key's
+// read-only RLS policy to actually persist that stamp.
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL as string,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string
+  process.env.SUPABASE_SERVICE_KEY as string
 )
 
 const TD_KEY = process.env.TWELVEDATA_API_KEY
 const FINNHUB_KEY = process.env.FINNHUB_API_KEY
 const GROQ_KEY = process.env.GROQ_API_KEY
 
-// Twelve Data Basic (free) plan limit, confirmed live at 800 credits/day.
-// Shared with resolve-signals via the same av_usage table/counter -- both
-// routes draw from one real daily total, same pattern used with Alpha
-// Vantage before. (Twelve Data also caps at 8 requests/minute, but that's
-// not tracked here -- low risk for this app's click-driven usage pattern.)
 const DAILY_LIMIT = 800
 
 function todayUTC() {
@@ -52,11 +50,6 @@ async function fetchSpotPrice(): Promise<{ price: number | null; usedNow: number
   }
 }
 
-// Finnhub's free Market News endpoint, not the paid Economic Calendar --
-// this gives recent forex-relevant headlines rather than a precise "CPI
-// in 40 minutes" flag, the closest free approximation of what the news
-// step used to do. Failure here is non-fatal -- the prompt just notes
-// news is unavailable and Groq reasons on price structure alone.
 async function fetchNews(): Promise<{ text: string; ok: boolean }> {
   if (!FINNHUB_KEY || FINNHUB_KEY.includes('paste_your')) {
     return { text: '', ok: false }
@@ -82,10 +75,10 @@ export async function GET() {
   if (!GROQ_KEY || GROQ_KEY.includes('paste_your')) {
     return Response.json({ error: 'Groq API key not set yet in .env.local (GROQ_API_KEY)' })
   }
+  if (!process.env.SUPABASE_SERVICE_KEY) {
+    return Response.json({ error: 'SUPABASE_SERVICE_KEY not set yet in .env.local -- required to mark signals as reviewed.' })
+  }
 
-  // Two-step check so the person gets an accurate message: "nothing open
-  // at all" reads very differently from "everything open has already
-  // been reviewed" -- both are zero-results but mean different things.
   const { count: openCount } = await supabase
     .from('signals')
     .select('id', { count: 'exact', head: true })
@@ -95,9 +88,6 @@ export async function GET() {
     return Response.json({ error: 'No open signals right now to analyze.' })
   }
 
-  // Only signals never AI-reviewed before -- ai_reviewed_at is stamped
-  // after a successful run below, so repeat clicks only ever pick up
-  // genuinely new signals, never re-review the same one twice.
   const { data: openSignals } = await supabase
     .from('signals')
     .select('id,signal_id,symbol,direction,signal_type,path,grade,exits,entry,created_at')
@@ -110,9 +100,6 @@ export async function GET() {
     return Response.json({ error: 'No new signals to analyze — all open signals have already been reviewed.' })
   }
 
-  // Price and news are independent lookups -- run them in parallel
-  // rather than sequentially so a real-world run stays as fast as this
-  // architecture allows.
   const [{ price: spot, usedNow }, { text: newsText, ok: newsOk }] = await Promise.all([
     fetchSpotPrice(),
     fetchNews(),
@@ -208,11 +195,11 @@ Rules:
       return Response.json({ error: 'Groq response was missing the assessments array.', raw: parsed, used: usedNow, limit: DAILY_LIMIT })
     }
 
-    // Stamp only after a genuinely successful analysis -- if Groq or
-    // parsing failed above, these signals stay unreviewed and are
-    // retried on the next click instead of being silently skipped.
     const reviewedIds = openSignals.map(s => s.id)
-    await supabase.from('signals').update({ ai_reviewed_at: new Date().toISOString() }).in('id', reviewedIds)
+    const { error: stampErr } = await supabase.from('signals').update({ ai_reviewed_at: new Date().toISOString() }).in('id', reviewedIds)
+    if (stampErr) {
+      console.error('Failed to stamp ai_reviewed_at:', stampErr.message)
+    }
 
     return Response.json({ assessments, spot, used: usedNow, limit: DAILY_LIMIT })
   } catch (e) {

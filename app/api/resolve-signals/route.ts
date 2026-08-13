@@ -1,13 +1,18 @@
 import { createClient } from '@supabase/supabase-js'
 
+// Service-role client: this route runs only server-side, never bundled
+// to the browser, so using the service key here is safe. The anon key
+// used previously only had a SELECT policy (added earlier to fix a
+// different read bug) -- writes under it were silently blocked by RLS,
+// which is why past runs reported "resolved" counts that never actually
+// persisted to the database (Supabase returns no error on an
+// RLS-blocked write, it just updates zero rows quietly).
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL as string,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string
+  process.env.SUPABASE_SERVICE_KEY as string
 )
 
 const TD_KEY = process.env.TWELVEDATA_API_KEY
-// Twelve Data Basic (free) plan limit, confirmed live at 800 credits/day.
-// Same av_usage table/counter shared with app/api/analysis/route.ts.
 const DAILY_LIMIT = 800
 
 function todayUTC() {
@@ -68,6 +73,9 @@ export async function POST() {
   if (!TD_KEY || TD_KEY.includes('paste_your')) {
     return Response.json({ error: 'Twelve Data API key not set yet in .env.local (TWELVEDATA_API_KEY)' })
   }
+  if (!process.env.SUPABASE_SERVICE_KEY) {
+    return Response.json({ error: 'SUPABASE_SERVICE_KEY not set yet in .env.local -- required for writing resolved signals.' })
+  }
 
   const { data: openSignals, error: fetchErr } = await supabase
     .from('signals')
@@ -106,7 +114,7 @@ export async function POST() {
     const result = resolveAgainstSpot(sig, spot)
 
     if (result.resolved) {
-      const { error: updateErr } = await supabase
+      const { error: updateErr, data: updateData } = await supabase
         .from('signals')
         .update({
           tp1_hit: result.tp1Hit,
@@ -117,8 +125,9 @@ export async function POST() {
           final_outcome: result.outcome,
         })
         .eq('id', sig.id)
+        .select()
 
-      if (!updateErr) resolvedCount++
+      if (!updateErr && updateData && updateData.length > 0) resolvedCount++
     }
 
     updates.push({ signal_id: sig.signal_id ?? sig.id, outcome: result.outcome, spot })

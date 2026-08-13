@@ -24,6 +24,42 @@ const VALIDITY_STYLE: Record<string, { color: string; label: string }> = {
   invalid: { color: '#F87171', label: 'INVALID' },
 }
 
+// Persists each button's last result in sessionStorage so navigating to
+// another page and back doesn't lose it -- only clicking the button
+// again replaces what's shown. sessionStorage (not localStorage) means
+// it naturally clears when the browser tab actually closes, rather than
+// showing stale results indefinitely across separate visits.
+const STORAGE_KEYS = {
+  assessments: 'brunc:analysis-assessments',
+  error: 'brunc:analysis-error',
+  resolveResult: 'brunc:resolve-result',
+  resolveError: 'brunc:resolve-error',
+}
+
+function readStored<T>(key: string): T | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = sessionStorage.getItem(key)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+function writeStored(key: string, value: any) {
+  if (typeof window === 'undefined') return
+  try {
+    if (value === null || value === undefined || value === '') {
+      sessionStorage.removeItem(key)
+    } else {
+      sessionStorage.setItem(key, JSON.stringify(value))
+    }
+  } catch {
+    // sessionStorage unavailable (private browsing, etc) -- page still
+    // works normally, just without persistence across navigation
+  }
+}
+
 export default function AnalysisPage() {
   const [assessments, setAssessments] = useState<Assessment[] | null>(null)
   const [loading, setLoading] = useState(false)
@@ -35,6 +71,13 @@ export default function AnalysisPage() {
   const [resolveError, setResolveError] = useState('')
   const [resolveResult, setResolveResult] = useState<any>(null)
   const [quota, setQuota] = useState<{ used: number; limit: number } | null>(null)
+
+  useEffect(() => {
+    setAssessments(readStored<Assessment[]>(STORAGE_KEYS.assessments))
+    setError(readStored<string>(STORAGE_KEYS.error) || '')
+    setResolveResult(readStored<any>(STORAGE_KEYS.resolveResult))
+    setResolveError(readStored<string>(STORAGE_KEYS.resolveError) || '')
+  }, [])
 
   useEffect(() => {
     fetch('/api/resolve-signals')
@@ -53,10 +96,20 @@ export default function AnalysisPage() {
       const res = await fetch('/api/analysis')
       const data = await res.json()
       if (data.used != null) setQuota({ used: data.used, limit: data.limit })
-      if (data.error) setError(data.error)
-      else setAssessments(data.assessments)
+      if (data.error) {
+        setError(data.error)
+        writeStored(STORAGE_KEYS.error, data.error)
+        writeStored(STORAGE_KEYS.assessments, null)
+      } else {
+        setAssessments(data.assessments)
+        writeStored(STORAGE_KEYS.assessments, data.assessments)
+        writeStored(STORAGE_KEYS.error, null)
+      }
     } catch {
-      setError('Could not reach analysis service. Check your Groq API key in .env.local')
+      const msg = 'Could not reach analysis service. Check your Groq API key in .env.local'
+      setError(msg)
+      writeStored(STORAGE_KEYS.error, msg)
+      writeStored(STORAGE_KEYS.assessments, null)
     }
     setLoading(false)
   }
@@ -69,10 +122,20 @@ export default function AnalysisPage() {
       const res = await fetch('/api/resolve-signals', { method: 'POST' })
       const data = await res.json()
       if (data.used != null) setQuota({ used: data.used, limit: data.limit })
-      if (data.error) setResolveError(data.error)
-      else setResolveResult(data)
+      if (data.error) {
+        setResolveError(data.error)
+        writeStored(STORAGE_KEYS.resolveError, data.error)
+        writeStored(STORAGE_KEYS.resolveResult, null)
+      } else {
+        setResolveResult(data)
+        writeStored(STORAGE_KEYS.resolveResult, data)
+        writeStored(STORAGE_KEYS.resolveError, null)
+      }
     } catch {
-      setResolveError('Could not reach the resolution service. Check your Twelve Data API key in .env.local')
+      const msg = 'Could not reach the resolution service. Check your Twelve Data API key in .env.local'
+      setResolveError(msg)
+      writeStored(STORAGE_KEYS.resolveError, msg)
+      writeStored(STORAGE_KEYS.resolveResult, null)
     }
     setResolving(false)
   }
