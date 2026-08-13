@@ -1,3 +1,4 @@
+// app/(app)/performance/page.tsx
 'use client'
 import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabaseClient'
@@ -27,18 +28,37 @@ function netPointsForSignal(sig: any): number {
   return 0
 }
 
-const SESSION_BOUNDS = [
-  { name: 'Asian', start: 0, end: 7 },
-  { name: 'London', start: 7, end: 13 },
-  { name: 'New York', start: 13, end: 22 },
-  { name: 'Overlap', start: 22, end: 24 },
-]
+// Same tier chain as the Signals page -- low -> high box tiers Pine
+// anchors SL/TP against via htf_rung.
+const TIER_CHAIN = ['3', '5', '15', '60', '240', 'D', 'W', 'M', '12M']
+const TIER_LABELS: Record<string, string> = {
+  '3': '3min', '5': '5min', '15': '15min', '60': '1H', '240': '4H',
+  'D': 'Daily', 'W': 'Weekly', 'M': 'Monthly', '12M': 'Year',
+}
 
+const TYPE_LABEL: Record<string, string> = {
+  fade: 'Fade entries',
+  sniper_fade: 'Fade entries',
+  sniper_confirmation: 'Sniper confirmation entries',
+  precision: 'Precision entries',
+  directional_ride: 'Directional ride entries',
+}
+
+// Real FX session windows in UTC: London 08:00-17:00, NY 13:00-22:00.
+// The 13:00-17:00 intersection is its own "Overlap" bucket rather than
+// being silently absorbed into either session (previous version's
+// boundaries didn't match this at all).
 function sessionForDate(dateStr: string) {
   const h = new Date(dateStr).getUTCHours()
-  const match = SESSION_BOUNDS.find(s => h >= s.start && h < s.end)
-  return match ? match.name : 'Overlap'
+  const inLondon = h >= 8 && h < 17
+  const inNewYork = h >= 13 && h < 22
+  if (inLondon && inNewYork) return 'Overlap'
+  if (inLondon) return 'London'
+  if (inNewYork) return 'New York'
+  return 'Asian'
 }
+
+const SESSION_ORDER = ['Asian', 'London', 'New York', 'Overlap']
 
 export default function PerformancePage() {
   const [signals, setSignals] = useState<any[]>([])
@@ -63,13 +83,20 @@ export default function PerformancePage() {
   const successRate = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : null
   const netPoints = closed.reduce((sum, s) => sum + netPointsForSignal(s), 0)
 
-  const byTier = [
-    { label: 'Precision entries', group: closed.filter(s => s.signal_type === 'precision') },
-    { label: 'Fade / confirmation entries', group: closed.filter(s => s.signal_type !== 'precision') },
-  ].map(g => ({
-    label: g.label,
-    pct: g.group.length ? Math.round((g.group.filter(s => s.final_outcome && s.final_outcome !== 'stopped_out').length / g.group.length) * 100) : null
-  }))
+  // One row per signal_type actually present in closed signals -- no
+  // longer a fixed precision-vs-everything-else split that lumped
+  // sniper_confirmation and directional_ride in with fade.
+  const byTier = (() => {
+    const types = Array.from(new Set(closed.map(s => s.signal_type).filter(Boolean)))
+    return types.map(t => {
+      const group = closed.filter(s => s.signal_type === t)
+      const g = group.filter(s => s.final_outcome && s.final_outcome !== 'stopped_out').length
+      return {
+        label: TYPE_LABEL[t as string] || (t as string).replace(/_/g, ' '),
+        pct: group.length ? Math.round((g / group.length) * 100) : null,
+      }
+    })
+  })()
 
   const byGrade = (() => {
     const map = new Map<string, any[]>()
@@ -89,22 +116,28 @@ export default function PerformancePage() {
       .sort((a, b) => b.label.localeCompare(a.label))
   })()
 
-  const byTimeframe = [
-    { key: 'tp1_hit', label: 'TP1 · 15min' },
-    { key: 'tp2_hit', label: 'TP2 · 1H' },
-    { key: 'tp3_hit', label: 'TP3 · 4H' },
-  ].map(tp => {
-    const tracked = closed.filter(s => s[tp.key] !== undefined && s[tp.key] !== null)
-    const hit = tracked.filter(s => s[tp.key] === true).length
-    return { label: tp.label, count: tracked.length, pct: tracked.length ? Math.round((hit / tracked.length) * 100) : null }
-  })
+  // Grouped by the actual htf_rung tier that anchored each signal's
+  // SL/TP, not a fixed 15min/1H/4H assumption -- mirrors the Signals
+  // page's per-signal timeframe labels from fix #1.
+  const byRung = (() => {
+    const present = TIER_CHAIN.filter(tier => closed.some(s => s.htf_rung === tier))
+    return present.map(tier => {
+      const group = closed.filter(s => s.htf_rung === tier)
+      const g = group.filter(s => s.final_outcome && s.final_outcome !== 'stopped_out').length
+      return {
+        label: TIER_LABELS[tier] || tier,
+        count: group.length,
+        pct: group.length ? Math.round((g / group.length) * 100) : null,
+      }
+    })
+  })()
 
-  const bySession = SESSION_BOUNDS.map(s => {
-    const group = closed.filter(sig => sessionForDate(sig.created_at) === s.name)
+  const bySession = SESSION_ORDER.map(name => {
+    const group = closed.filter(sig => sessionForDate(sig.created_at) === name)
     const sWins = group.filter(sig => sig.final_outcome && sig.final_outcome !== 'stopped_out').length
     const winPct = group.length ? Math.round((sWins / group.length) * 100) : 0
     const lossPct = group.length ? 100 - winPct : 0
-    return { name: s.name, count: group.length, winPct, lossPct }
+    return { name, count: group.length, winPct, lossPct }
   })
 
   return (
@@ -141,7 +174,9 @@ export default function PerformancePage() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <div className="bg-[#0B0F14] border border-[#1B232C] rounded-xl p-6">
           <div className="font-mono text-[11px] tracking-widest text-[#7C8896] uppercase mb-4">By Signal Type</div>
-          {byTier.map((t, i) => (
+          {byTier.length === 0 ? (
+            <div className="text-[#7C8896] font-mono text-sm">No closed signals yet.</div>
+          ) : byTier.map((t, i) => (
             <div key={i} className="mb-4">
               <div className="flex justify-between font-mono text-sm mb-1.5">
                 <span className="text-[#EDEFF2]">{t.label}</span><span className="text-white">{t.pct !== null ? t.pct + '%' : '—'}</span>
@@ -189,10 +224,10 @@ export default function PerformancePage() {
 
       <div className="bg-[#0B0F14] border border-[#1B232C] rounded-xl p-6 mt-5">
         <div className="font-mono text-[11px] tracking-widest text-[#7C8896] uppercase mb-4">Performance by Timeframe — HTF Confluence</div>
-        {byTimeframe.every(t => t.count === 0) ? (
+        {byRung.length === 0 ? (
           <div className="text-[#7C8896] font-mono text-sm">No TP-level outcome data yet — populates once the closed-signal analysis job runs.</div>
         ) : (
-          byTimeframe.map((t, i) => (
+          byRung.map((t, i) => (
             <div key={i} className="mb-4">
               <div className="flex justify-between font-mono text-sm mb-1.5">
                 <span className="text-[#EDEFF2]">{t.label} <span className="text-[#3A434D]">· {t.count} tracked</span></span>

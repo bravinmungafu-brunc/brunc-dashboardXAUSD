@@ -1,3 +1,4 @@
+// app/(app)/signals/page.tsx
 'use client'
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
@@ -5,6 +6,30 @@ import { supabase } from '@/lib/supabaseClient'
 const POINT_SIZE = 0.01
 function pointsBetween(a: number, b: number) {
   return Math.round(Math.abs(a - b) / POINT_SIZE)
+}
+
+// Tier chain Pine's htf_rung anchors against, low -> high. TP2/TP3 scale
+// from the next two tiers up from htf_rung (per signal schema notes) --
+// not a fixed 15min/1H/4H set like the old hardcoded labels assumed.
+const TIER_CHAIN = ['3', '5', '15', '60', '240', 'D', 'W', 'M', '12M']
+const TIER_LABELS: Record<string, string> = {
+  '3': '3min', '5': '5min', '15': '15min', '60': '1H', '240': '4H',
+  'D': 'Daily', 'W': 'Weekly', 'M': 'Monthly', '12M': 'Year',
+}
+
+function getTpTimeframes(htfRung: string | null | undefined) {
+  if (!htfRung || !TIER_CHAIN.includes(htfRung)) {
+    return { tp1: null, tp2: null, tp3: null }
+  }
+  const idx = TIER_CHAIN.indexOf(htfRung)
+  const lastIdx = TIER_CHAIN.length - 1
+  const tp2Idx = Math.min(idx + 1, lastIdx)
+  const tp3Idx = Math.min(idx + 2, lastIdx)
+  return {
+    tp1: TIER_LABELS[htfRung],
+    tp2: TIER_LABELS[TIER_CHAIN[tp2Idx]],
+    tp3: TIER_LABELS[TIER_CHAIN[tp3Idx]],
+  }
 }
 
 function getExits(sig: any) {
@@ -118,6 +143,7 @@ export default function SignalsPage() {
             const isClosed = sig.status === 'closed'
             const isWin = sig.final_outcome === 'tp_hit'
             const regime = sig.regime
+            const tpTf = getTpTimeframes(sig.htf_rung)
 
             return (
               <div key={sig.id} className={`bg-[#0B0F14] border-l-2 ${isClosed ? (isWin ? 'border-l-[#2B8CE0]' : 'border-l-[#F87171]') : 'border-l-[#2DD4BF]'} border-y border-r border-[#1B232C] rounded-xl p-5`}>
@@ -130,7 +156,7 @@ export default function SignalsPage() {
                       <span className="font-mono text-[10px] px-2 py-0.5 rounded border border-[#3A434D] text-[#3A434D]">{sig.path}</span>
                     )}
                     {sig.htf_rung && (
-                      <span className="font-mono text-[10px] px-2 py-0.5 rounded border border-[#3A434D] text-[#7C8896]">rung {sig.htf_rung}</span>
+                      <span className="font-mono text-[10px] px-2 py-0.5 rounded border border-[#3A434D] text-[#7C8896]">rung {TIER_LABELS[sig.htf_rung] ?? sig.htf_rung}</span>
                     )}
                     {regime?.mode && (
                       <span className={`font-mono text-[10px] px-2 py-0.5 rounded border ${
@@ -166,21 +192,21 @@ export default function SignalsPage() {
                   </div>
                   <div className="bg-[#0F141A] rounded-lg p-2.5">
                     <div className="text-[9px] text-[#7C8896] uppercase tracking-wide mb-1 font-mono">
-                      TP1 <span className="text-[#3A434D]">· 15min</span>
+                      TP1 {tpTf.tp1 && <span className="text-[#3A434D]">· {tpTf.tp1}</span>}
                       {sig.tp1_hit && <span className="text-[#2B8CE0]"> ✓</span>}
                     </div>
                     <div className="text-[#34D399] font-mono text-sm">{tp1 ?? '—'}</div>
                   </div>
                   <div className="bg-[#0F141A] rounded-lg p-2.5">
                     <div className="text-[9px] text-[#7C8896] uppercase tracking-wide mb-1 font-mono">
-                      TP2 <span className="text-[#3A434D]">· 1H</span>
+                      TP2 {tpTf.tp2 && <span className="text-[#3A434D]">· {tpTf.tp2}</span>}
                       {sig.tp2_hit && <span className="text-[#2B8CE0]"> ✓</span>}
                     </div>
                     <div className="text-[#34D399] font-mono text-sm">{tp2 ?? '—'}</div>
                   </div>
                   <div className="bg-[#0F141A] rounded-lg p-2.5">
                     <div className="text-[9px] text-[#7C8896] uppercase tracking-wide mb-1 font-mono">
-                      TP3 <span className="text-[#3A434D]">· 4H</span>
+                      TP3 {tpTf.tp3 && <span className="text-[#3A434D]">· {tpTf.tp3}</span>}
                       {sig.tp3_hit && <span className="text-[#2B8CE0]"> ✓</span>}
                     </div>
                     <div className="text-[#34D399] font-mono text-sm">{tp3 ?? '—'}</div>

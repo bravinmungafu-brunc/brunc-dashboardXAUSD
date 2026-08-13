@@ -45,6 +45,10 @@ export default function AnalysisPage() {
 
   const quotaExhausted = quota != null && quota.used >= quota.limit
 
+  // Now also reads used/limit back from /api/analysis, since that route's
+  // own Alpha Vantage call is tracked against the same shared quota
+  // counter as resolve-signals — the badge on screen reflects both
+  // buttons' usage, not just resolve-signals'.
   async function runAnalysis() {
     setLoading(true)
     setError('')
@@ -52,6 +56,7 @@ export default function AnalysisPage() {
     try {
       const res = await fetch('/api/analysis')
       const data = await res.json()
+      if (data.used != null) setQuota({ used: data.used, limit: data.limit })
       if (data.error) setError(data.error)
       else setAssessments(data.assessments)
     } catch {
@@ -194,77 +199,3 @@ export default function AnalysisPage() {
           className="flex items-center gap-2.5 px-5 py-3 bg-[#2DD4BF] hover:bg-[#4ee0cc] disabled:opacity-40 text-[#05070A] font-semibold text-sm rounded-xl transition-all mb-2">
           {resolving ? (
             <>
-              <span className="w-4 h-4 border-2 border-[#05070A]/30 border-t-[#05070A] rounded-full inline-block" style={{ animation: 'spin 0.7s linear infinite' }} />
-              Analysing closed signals…
-            </>
-          ) : quotaExhausted ? (
-            <>DAILY LIMIT REACHED</>
-          ) : (
-            <>ANALYSE</>
-          )}
-        </button>
-        {quotaExhausted && (
-          <div className="mono text-[10px] text-[#7C8896] mb-3">Resets at 00:00 UTC.</div>
-        )}
-
-        {resolveError && (
-          <div className="bg-[#E5555A]/10 border border-[#E5555A]/25 rounded-2xl px-5 py-4 mono text-xs text-[#E5555A] mb-4 mt-3">
-            {resolveError}
-          </div>
-        )}
-
-        {resolveResult && (
-          <div className="bg-[#0D1218] border border-[#1C2530] rounded-2xl p-6 fade-up mt-3">
-            <div className="flex items-center gap-2 mb-4 pb-4 border-b border-[#1C2530]">
-              <span className="mono text-[10px] text-[#2DD4BF] tracking-widest uppercase">Resolution Summary</span>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-              <div>
-                <div className="mono text-[9px] text-[#7C8896] uppercase tracking-wide mb-1">Successful</div>
-                <div className="text-2xl font-bold text-[#2B8CE0]">{successfulCount}</div>
-              </div>
-              <div>
-                <div className="mono text-[9px] text-[#7C8896] uppercase tracking-wide mb-1">Unsuccessful</div>
-                <div className="text-2xl font-bold text-[#F87171]">{unsuccessfulCount}</div>
-              </div>
-              <div>
-                <div className="mono text-[9px] text-[#7C8896] uppercase tracking-wide mb-1">Closed</div>
-                <div className="text-2xl font-bold text-white">{resolveResult.resolved ?? 0}</div>
-              </div>
-              <div>
-                <div className="mono text-[9px] text-[#7C8896] uppercase tracking-wide mb-1">Open</div>
-                <div className="text-2xl font-bold text-[#7C8896]">{resolveResult.stillOpen ?? 0}</div>
-              </div>
-            </div>
-
-            {updates.length > 0 ? (
-              <div className="space-y-1.5 pt-3 border-t border-[#1C2530]">
-                {updates.map((u: any, i: number) => {
-                  const style = outcomeStyle(u.outcome)
-                  return (
-                    <div key={i} className="font-mono text-[11px] flex justify-between items-center py-1">
-                      <span className="text-[#EDEFF2]">{u.signal_id}</span>
-                      <span className={`px-2 py-0.5 rounded ${style.className}`}>{style.label}</span>
-                    </div>
-                  )
-                })}
-              </div>
-            ) : (
-              <div className="mono text-[11px] text-[#7C8896] pt-3 border-t border-[#1C2530]">
-                No open signals were checked on this run.
-              </div>
-            )}
-          </div>
-        )}
-
-        {!resolveResult && !resolving && !resolveError && (
-          <div className="bg-[#0D1218] border border-[#1C2530] border-dashed rounded-2xl p-10 text-center mt-3">
-            <div className="mono text-[11px] text-[#7C8896]">
-              Click &quot;ANALYSE&quot; to pull live market data from Alpha Vantage and mark each closed-window signal as a win or loss. Results feed the Performance page.
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
