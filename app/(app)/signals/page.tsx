@@ -1,4 +1,3 @@
-// app/(app)/signals/page.tsx
 'use client'
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
@@ -42,9 +41,9 @@ function getExits(sig: any) {
 }
 
 // Prefers Pine's own computed risk object. Math.abs() guards against
-// newer payloads sending a negative sl_distance for certain setups
-// (e.g. directional_ride) — distance is always displayed as a positive
-// magnitude regardless of the sign Pine sends.
+// newer payloads sending a negative sl_distance for certain setups —
+// distance is always displayed as a positive magnitude regardless of
+// the sign Pine sends.
 function getRiskReward(sig: any, entry: number | null, sl: number | null, tp1: number | null) {
   if (sig.risk?.sl_distance != null && sig.risk?.tp1_distance != null) {
     return {
@@ -60,12 +59,16 @@ function getRiskReward(sig: any, entry: number | null, sl: number | null, tp1: n
   return { riskPoints, rewardPoints, rr }
 }
 
+// Only the three signal_type values the current Pine script actually
+// emits (confirmed directly against f_buildPayload calls in
+// BRUNC-AI-SNIPER-SIGNALS.pine). No directional_ride generator exists
+// in the script, so no filter/label is kept for it here — it would
+// never match a real row.
 const TYPE_LABEL: Record<string, string> = {
   fade: 'FADE',
   sniper_fade: 'FADE',
   sniper_confirmation: 'SNIPER CONFIRMATION',
   precision: 'PRECISION',
-  directional_ride: 'DIRECTIONAL RIDE',
 }
 
 function formatKenyaTime(iso: string) {
@@ -106,7 +109,6 @@ export default function SignalsPage() {
     if (filter === 'sniper_confirmation') return s.signal_type === 'sniper_confirmation'
     if (filter === 'precision') return s.signal_type === 'precision'
     if (filter === 'fade') return s.signal_type === 'fade' || s.signal_type === 'sniper_fade'
-    if (filter === 'directional') return s.signal_type === 'directional_ride'
     if (filter === 'open') return s.status === 'open'
     if (filter === 'closed') return s.status === 'closed'
     return true
@@ -120,11 +122,11 @@ export default function SignalsPage() {
       </div>
 
       <div className="flex gap-2 mb-6 flex-wrap">
-        {['all','sniper_confirmation','precision','fade','directional','open','closed'].map(f => (
+        {['all','sniper_confirmation','precision','fade','open','closed'].map(f => (
           <button key={f} onClick={() => setFilter(f)}
             className={`font-mono text-[11px] uppercase tracking-wide px-4 py-1.5 rounded ${
               filter === f ? 'bg-[#14625A]/40 text-[#2DD4BF] border border-[#2DD4BF]' : 'border border-[#1B232C] text-[#7C8896]'
-            }`}>{f === 'sniper_confirmation' ? 'SNIPER CONFIRMATION' : f === 'directional' ? 'DIRECTIONAL RIDE' : f}</button>
+            }`}>{f === 'sniper_confirmation' ? 'SNIPER CONFIRMATION' : f}</button>
         ))}
       </div>
 
@@ -142,7 +144,6 @@ export default function SignalsPage() {
             const gradeOf = sig.grade?.of ?? null
             const isClosed = sig.status === 'closed'
             const isWin = sig.final_outcome === 'tp_hit'
-            const regime = sig.regime
             const tpTf = getTpTimeframes(sig.htf_rung)
 
             return (
@@ -157,13 +158,6 @@ export default function SignalsPage() {
                     )}
                     {sig.htf_rung && (
                       <span className="font-mono text-[10px] px-2 py-0.5 rounded border border-[#3A434D] text-[#7C8896]">rung {TIER_LABELS[sig.htf_rung] ?? sig.htf_rung}</span>
-                    )}
-                    {regime?.mode && (
-                      <span className={`font-mono text-[10px] px-2 py-0.5 rounded border ${
-                        regime.mode === 'directional' ? 'border-[#F5A623] text-[#F5A623]' : 'border-[#7C8896] text-[#7C8896]'
-                      }`}>
-                        {regime.mode}{regime.direction ? ` · ${regime.direction}` : ''}
-                      </span>
                     )}
                     {gradeValue !== null && (
                       <span className="font-mono text-[10px] px-2 py-0.5 rounded border border-[#7C8896] text-[#7C8896]">
