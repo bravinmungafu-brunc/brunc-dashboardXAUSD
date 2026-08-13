@@ -56,7 +56,7 @@ export default function AnalysisPage() {
       if (data.error) setError(data.error)
       else setAssessments(data.assessments)
     } catch {
-      setError('Could not reach analysis service. Check your Gemini API key in .env.local')
+      setError('Could not reach analysis service. Check your Groq API key in .env.local')
     }
     setLoading(false)
   }
@@ -72,7 +72,7 @@ export default function AnalysisPage() {
       if (data.error) setResolveError(data.error)
       else setResolveResult(data)
     } catch {
-      setResolveError('Could not reach the resolution service. Check your Alpha Vantage API key in .env.local')
+      setResolveError('Could not reach the resolution service. Check your Twelve Data API key in .env.local')
     }
     setResolving(false)
   }
@@ -186,7 +186,7 @@ export default function AnalysisPage() {
           </div>
           {quota && (
             <span className="mono text-[10px] text-[#7C8896]">
-              Alpha Vantage: <span className={quotaExhausted ? 'text-[#F87171]' : 'text-[#2DD4BF]'}>{quota.used}/{quota.limit}</span> today
+              Twelve Data: <span className={quotaExhausted ? 'text-[#F87171]' : 'text-[#2DD4BF]'}>{quota.used}/{quota.limit}</span> today
             </span>
           )}
         </div>
@@ -261,7 +261,7 @@ export default function AnalysisPage() {
         {!resolveResult && !resolving && !resolveError && (
           <div className="bg-[#0D1218] border border-[#1C2530] border-dashed rounded-2xl p-10 text-center mt-3">
             <div className="mono text-[11px] text-[#7C8896]">
-              Click &quot;ANALYSE&quot; to pull live market data from Alpha Vantage and mark each closed-window signal as a win or loss. Results feed the Performance page.
+              Click &quot;ANALYSE&quot; to pull live market data from Twelve Data and mark each closed-window signal as a win or loss. Results feed the Performance page.
             </div>
           </div>
         )}

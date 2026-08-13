@@ -5,8 +5,10 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string
 )
 
-const AV_KEY = process.env.ALPHAVANTAGE_API_KEY
-const DAILY_LIMIT = 25
+const TD_KEY = process.env.TWELVEDATA_API_KEY
+// Twelve Data Basic (free) plan limit, confirmed live at 800 credits/day.
+// Same av_usage table/counter shared with app/api/analysis/route.ts.
+const DAILY_LIMIT = 800
 
 function todayUTC() {
   return new Date().toISOString().slice(0, 10)
@@ -29,12 +31,11 @@ export async function GET() {
 }
 
 async function fetchSpotPrice(): Promise<{ price: number | null; timestamp: string | null; raw: any }> {
-  const url = `https://www.alphavantage.co/query?function=GOLD_SILVER_SPOT&symbol=XAU&apikey=${AV_KEY}`
+  const url = `https://api.twelvedata.com/price?symbol=XAU/USD&apikey=${TD_KEY}`
   const res = await fetch(url)
   const data = await res.json()
   const price = data?.price != null ? parseFloat(data.price) : null
-  const timestamp = data?.timestamp ?? null
-  return { price, timestamp, raw: data }
+  return { price, timestamp: new Date().toISOString(), raw: data }
 }
 
 function resolveAgainstSpot(signal: any, spot: number) {
@@ -64,8 +65,8 @@ function resolveAgainstSpot(signal: any, spot: number) {
 }
 
 export async function POST() {
-  if (!AV_KEY || AV_KEY.includes('paste_your')) {
-    return Response.json({ error: 'Alpha Vantage API key not set yet in .env.local (ALPHAVANTAGE_API_KEY)' })
+  if (!TD_KEY || TD_KEY.includes('paste_your')) {
+    return Response.json({ error: 'Twelve Data API key not set yet in .env.local (TWELVEDATA_API_KEY)' })
   }
 
   const { data: openSignals, error: fetchErr } = await supabase
@@ -84,7 +85,7 @@ export async function POST() {
 
   if (used >= DAILY_LIMIT) {
     return Response.json({
-      error: `Daily Alpha Vantage limit reached (${used}/${DAILY_LIMIT}). Resets at 00:00 UTC.`,
+      error: `Daily Twelve Data limit reached (${used}/${DAILY_LIMIT}). Resets at 00:00 UTC.`,
       quotaExceeded: true,
       used,
       limit: DAILY_LIMIT,
@@ -95,7 +96,7 @@ export async function POST() {
   const usedNow = await incrementUsage()
 
   if (spot == null) {
-    return Response.json({ error: 'Could not read a price from the Alpha Vantage response.', raw, used: usedNow, limit: DAILY_LIMIT })
+    return Response.json({ error: 'Could not read a price from the Twelve Data response.', raw, used: usedNow, limit: DAILY_LIMIT })
   }
 
   const updates: any[] = []
@@ -120,8 +121,6 @@ export async function POST() {
       if (!updateErr) resolvedCount++
     }
 
-    // Every checked signal gets an entry now — open, successful, or
-    // unsuccessful — not just the ones that closed on this run.
     updates.push({ signal_id: sig.signal_id ?? sig.id, outcome: result.outcome, spot })
   }
 
