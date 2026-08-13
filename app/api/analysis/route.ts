@@ -8,10 +8,6 @@ const supabase = createClient(
 const AV_KEY = process.env.ALPHAVANTAGE_API_KEY
 const DAILY_LIMIT = 25
 
-// Same av_usage table/counter resolve-signals writes to -- this route's
-// own spot-price call is tracked here too, so both buttons draw from
-// one real shared total instead of the app's counter drifting from
-// Alpha Vantage's own count.
 function todayUTC() {
   return new Date().toISOString().slice(0, 10)
 }
@@ -48,9 +44,6 @@ async function fetchSpotPrice(): Promise<{ price: number | null; usedNow: number
   }
 }
 
-// Pull the first [...] block out of a response that may wrap valid JSON
-// in stray prose or citation text despite instructions -- more forgiving
-// than only stripping markdown fences.
 function extractJsonArray(text: string): any[] | null {
   const cleaned = text.replace(/```json|```/g, '').trim()
   try {
@@ -132,7 +125,7 @@ Rules:
 
   try {
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${geminiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -148,10 +141,6 @@ Rules:
     )
     const data = await res.json()
 
-    // Surface Gemini's actual error/block reason instead of a generic
-    // "invalid JSON" message when there's no text to even parse -- an
-    // empty raw string usually means an API-level error or a safety
-    // block, not malformed JSON, and hiding that made this undiagnosable.
     if (!res.ok || data.error) {
       return Response.json({
         error: `Gemini API error: ${data.error?.message || res.statusText}`,
