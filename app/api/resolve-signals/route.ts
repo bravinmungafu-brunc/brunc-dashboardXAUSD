@@ -1,12 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
 
-// Service-role client: this route runs only server-side, never bundled
-// to the browser, so using the service key here is safe. The anon key
-// used previously only had a SELECT policy (added earlier to fix a
-// different read bug) -- writes under it were silently blocked by RLS,
-// which is why past runs reported "resolved" counts that never actually
-// persisted to the database (Supabase returns no error on an
-// RLS-blocked write, it just updates zero rows quietly).
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL as string,
   process.env.SUPABASE_SERVICE_KEY as string
@@ -14,6 +7,8 @@ const supabase = createClient(
 
 const TD_KEY = process.env.TWELVEDATA_API_KEY
 const DAILY_LIMIT = 800
+
+const MAX_SIGNALS_PER_RUN = 20
 
 function todayUTC() {
   return new Date().toISOString().slice(0, 10)
@@ -35,38 +30,45 @@ export async function GET() {
   return Response.json({ used, limit: DAILY_LIMIT })
 }
 
-async function fetchSpotPrice(): Promise<{ price: number | null; timestamp: string | null; raw: any }> {
-  const url = `https://api.twelvedata.com/price?symbol=XAU/USD&apikey=${TD_KEY}`
+const INTERVAL_MAP: Record<string, string> = { '1': '1min', '3': '5min', '5': '5min' }
+
+async function fetchBarsSince(startIso: string, execTf: string | null | undefined) {
+  const interval = INTERVAL_MAP[execTf ?? ''] ?? '1min'
+  const start = new Date(startIso)
+  const startParam = start.toISOString().slice(0, 19).replace('T', ' ')
+
+  const url = `https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=${interval}&start_date=${encodeURIComponent(startParam)}&order=ASC&outputsize=5000&apikey=${TD_KEY}`
   const res = await fetch(url)
   const data = await res.json()
-  const price = data?.price != null ? parseFloat(data.price) : null
-  return { price, timestamp: new Date().toISOString(), raw: data }
-}
 
-function resolveAgainstSpot(signal: any, spot: number) {
-  const direction = (signal.direction === 'buy' || signal.direction === 'long') ? 'buy' : 'sell'
-  const sl = signal.exits?.sl
-  const tp1 = signal.exits?.tp1
-  const tp2 = signal.exits?.tp2
-  const tp3 = signal.exits?.tp3
-
-  let slHit = false, tp1Hit = false, tp2Hit = false, tp3Hit = false
-
-  if (direction === 'buy') {
-    slHit = sl != null && spot <= sl
-    tp1Hit = tp1 != null && spot >= tp1
-    tp2Hit = tp2 != null && spot >= tp2
-    tp3Hit = tp3 != null && spot >= tp3
-  } else {
-    slHit = sl != null && spot >= sl
-    tp1Hit = tp1 != null && spot <= tp1
-    tp2Hit = tp2 != null && spot <= tp2
-    tp3Hit = tp3 != null && spot <= tp3
+  if (data?.status === 'error' || !Array.isArray(data?.values)) {
+    return { bars: [] as { time: string; high: number; low: number }[], raw: data }
   }
 
-  const anyTpHit = tp1Hit || tp2Hit || tp3Hit
-  const outcome = !slHit && !anyTpHit ? 'still_open' : slHit ? 'stopped_out' : 'tp_hit'
-  return { slHit, tp1Hit, tp2Hit, tp3Hit, outcome, resolved: outcome !== 'still_open' }
+  const bars = data.values
+    .map((v: any) => ({ time: v.datetime, high: parseFloat(v.high), low: parseFloat(v.low) }))
+    .sort((a: any, b: any) => a.time.localeCompare(b.time))
+
+  return { bars, raw: null as any }
+}
+
+function walkBarsForOutcome(
+  bars: { time: string; high: number; low: number }[],
+  direction: string,
+  sl: number | null,
+  tp: number | null
+) {
+  const isBuy = direction === 'buy' || direction === 'long'
+
+  for (const bar of bars) {
+    const slTouched = sl != null && (isBuy ? bar.low <= sl : bar.high >= sl)
+    const tpTouched = tp != null && (isBuy ? bar.high >= tp : bar.low <= tp)
+
+    if (slTouched) return { outcome: 'stopped_out', slHit: true, tpHit: tpTouched, resolvedAt: bar.time }
+    if (tpTouched) return { outcome: 'tp_hit', slHit: false, tpHit: true, resolvedAt: bar.time }
+  }
+
+  return { outcome: 'still_open', slHit: false, tpHit: false, resolvedAt: null as string | null }
 }
 
 export async function POST() {
@@ -85,44 +87,52 @@ export async function POST() {
 
   if (fetchErr) return Response.json({ error: fetchErr.message })
 
-  const used = await getUsage()
+  let used = await getUsage()
 
   if (!openSignals || openSignals.length === 0) {
-    return Response.json({ checked: 0, resolved: 0, stillOpen: 0, updates: [], used, limit: DAILY_LIMIT })
+    return Response.json({ checked: 0, resolved: 0, stillOpen: 0, deferred: 0, updates: [], used, limit: DAILY_LIMIT })
   }
 
-  if (used >= DAILY_LIMIT) {
-    return Response.json({
-      error: `Daily Twelve Data limit reached (${used}/${DAILY_LIMIT}). Resets at 00:00 UTC.`,
-      quotaExceeded: true,
-      used,
-      limit: DAILY_LIMIT,
-    })
-  }
-
-  const { price: spot, timestamp, raw } = await fetchSpotPrice()
-  const usedNow = await incrementUsage()
-
-  if (spot == null) {
-    return Response.json({ error: 'Could not read a price from the Twelve Data response.', raw, used: usedNow, limit: DAILY_LIMIT })
-  }
+  const toProcess = openSignals.slice(0, MAX_SIGNALS_PER_RUN)
+  const deferred = openSignals.length - toProcess.length
 
   const updates: any[] = []
   let resolvedCount = 0
 
-  for (const sig of openSignals) {
-    const result = resolveAgainstSpot(sig, spot)
+  for (const sig of toProcess) {
+    if (used >= DAILY_LIMIT) {
+      updates.push({ signal_id: sig.signal_id ?? sig.id, outcome: 'quota_exceeded' })
+      continue
+    }
 
-    if (result.resolved) {
+    const direction = (sig.direction === 'buy' || sig.direction === 'long') ? 'buy' : 'sell'
+    const sl = sig.exits?.sl ?? null
+    const tp = sig.exits?.tp ?? null
+
+    const { bars, raw } = await fetchBarsSince(sig.created_at, sig.execution_tf)
+    used = await incrementUsage()
+
+    if (bars.length === 0) {
+      updates.push({ signal_id: sig.signal_id ?? sig.id, outcome: 'no_data', raw })
+      continue
+    }
+
+    const result = walkBarsForOutcome(bars, direction, sl, tp)
+
+    if (result.outcome !== 'still_open') {
+      const resolvedAtDate = result.resolvedAt ? new Date(result.resolvedAt) : new Date()
+      const createdAtDate = new Date(sig.created_at)
+      const timeToResolutionSeconds = Math.max(0, Math.round((resolvedAtDate.getTime() - createdAtDate.getTime()) / 1000))
+
       const { error: updateErr, data: updateData } = await supabase
         .from('signals')
         .update({
-          tp1_hit: result.tp1Hit,
-          tp2_hit: result.tp2Hit,
-          tp3_hit: result.tp3Hit,
           sl_hit: result.slHit,
+          tp_hit: result.tpHit,
           status: 'closed',
           final_outcome: result.outcome,
+          resolved_at: resolvedAtDate.toISOString(),
+          time_to_resolution: `${timeToResolutionSeconds} seconds`,
         })
         .eq('id', sig.id)
         .select()
@@ -130,17 +140,16 @@ export async function POST() {
       if (!updateErr && updateData && updateData.length > 0) resolvedCount++
     }
 
-    updates.push({ signal_id: sig.signal_id ?? sig.id, outcome: result.outcome, spot })
+    updates.push({ signal_id: sig.signal_id ?? sig.id, outcome: result.outcome, barsChecked: bars.length })
   }
 
   return Response.json({
-    checked: openSignals.length,
+    checked: toProcess.length,
     resolved: resolvedCount,
-    stillOpen: openSignals.length - resolvedCount,
-    spot,
-    spot_timestamp: timestamp,
+    stillOpen: toProcess.length - resolvedCount,
+    deferred,
     updates,
-    used: usedNow,
+    used,
     limit: DAILY_LIMIT,
   })
 }

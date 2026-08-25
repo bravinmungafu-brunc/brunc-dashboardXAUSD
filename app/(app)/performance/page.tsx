@@ -9,10 +9,6 @@ function pointsBetween(a: number, b: number) {
   return Math.round(Math.abs(a - b) / POINT_SIZE)
 }
 
-// Approximation: for tp_hit outcomes, uses the furthest TP marked hit
-// (TP3 > TP2 > TP1) as the reference exit price. Since resolution is a
-// live spot-price snapshot (not full history), this is the most accurate
-// read available, not a precise recorded fill price.
 function netPointsForSignal(sig: any): number {
   const entry = sig.entry
   const exits = sig.exits || {}
@@ -21,33 +17,23 @@ function netPointsForSignal(sig: any): number {
   if (sig.final_outcome === 'stopped_out' && exits.sl != null) {
     return -pointsBetween(entry, exits.sl)
   }
-  if (sig.final_outcome === 'tp_hit') {
-    const exitPrice = sig.tp3_hit ? exits.tp3 : sig.tp2_hit ? exits.tp2 : sig.tp1_hit ? exits.tp1 : null
-    if (exitPrice != null) return pointsBetween(entry, exitPrice)
+  if (sig.final_outcome === 'tp_hit' && exits.tp != null) {
+    return pointsBetween(entry, exits.tp)
   }
   return 0
 }
 
-// Same tier chain as the Signals page -- low -> high box tiers Pine
-// anchors SL/TP against via htf_rung.
-const TIER_CHAIN = ['3', '5', '15', '60', '240', 'D', 'W', 'M', '12M']
+const TIER_CHAIN = ['15', '60', '240', 'D', 'W', 'M', '12M']
 const TIER_LABELS: Record<string, string> = {
-  '3': '3min', '5': '5min', '15': '15min', '60': '1H', '240': '4H',
+  '15': '15min', '60': '1H', '240': '4H',
   'D': 'Daily', 'W': 'Weekly', 'M': 'Monthly', '12M': 'Year',
 }
 
 const TYPE_LABEL: Record<string, string> = {
-  fade: 'Fade entries',
-  sniper_fade: 'Fade entries',
   sniper_confirmation: 'Sniper confirmation entries',
   precision: 'Precision entries',
-  directional_ride: 'Directional ride entries',
 }
 
-// Real FX session windows in UTC: London 08:00-17:00, NY 13:00-22:00.
-// The 13:00-17:00 intersection is its own "Overlap" bucket rather than
-// being silently absorbed into either session (previous version's
-// boundaries didn't match this at all).
 function sessionForDate(dateStr: string) {
   const h = new Date(dateStr).getUTCHours()
   const inLondon = h >= 8 && h < 17
@@ -59,6 +45,14 @@ function sessionForDate(dateStr: string) {
 }
 
 const SESSION_ORDER = ['Asian', 'London', 'New York', 'Overlap']
+
+const MANUAL_CONDITIONS: { key: string; label: string }[] = [
+  { key: 'bias_1h', label: '1H directional bias' },
+  { key: 'zone_tapped', label: 'Order block zone tapped' },
+  { key: 'discount_premium', label: 'Fibonacci discount/premium' },
+  { key: 'session_open', label: 'London/NY session open' },
+  { key: 'doji_or_rejection', label: '1m doji or rejection candle' },
+]
 
 export default function PerformancePage() {
   const [signals, setSignals] = useState<any[]>([])
@@ -83,9 +77,6 @@ export default function PerformancePage() {
   const successRate = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : null
   const netPoints = closed.reduce((sum, s) => sum + netPointsForSignal(s), 0)
 
-  // One row per signal_type actually present in closed signals -- no
-  // longer a fixed precision-vs-everything-else split that lumped
-  // sniper_confirmation and directional_ride in with fade.
   const byTier = (() => {
     const types = Array.from(new Set(closed.map(s => s.signal_type).filter(Boolean)))
     return types.map(t => {
@@ -116,9 +107,6 @@ export default function PerformancePage() {
       .sort((a, b) => b.label.localeCompare(a.label))
   })()
 
-  // Grouped by the actual htf_rung tier that anchored each signal's
-  // SL/TP, not a fixed 15min/1H/4H assumption -- mirrors the Signals
-  // page's per-signal timeframe labels from fix #1.
   const byRung = (() => {
     const present = TIER_CHAIN.filter(tier => closed.some(s => s.htf_rung === tier))
     return present.map(tier => {
@@ -139,6 +127,25 @@ export default function PerformancePage() {
     const lossPct = group.length ? 100 - winPct : 0
     return { name, count: group.length, winPct, lossPct }
   })
+
+  const byManualCondition = (() => {
+    const precisionClosed = closed.filter(s => s.signal_type === 'precision' && s.manual_entry_filter?.applicable === true)
+    if (precisionClosed.length === 0) return null
+
+    return MANUAL_CONDITIONS.map(({ key, label }) => {
+      const trueGroup = precisionClosed.filter(s => s.manual_entry_filter[key] === true)
+      const falseGroup = precisionClosed.filter(s => s.manual_entry_filter[key] === false)
+      const trueWins = trueGroup.filter(s => s.final_outcome && s.final_outcome !== 'stopped_out').length
+      const falseWins = falseGroup.filter(s => s.final_outcome && s.final_outcome !== 'stopped_out').length
+      return {
+        label,
+        trueCount: trueGroup.length,
+        truePct: trueGroup.length ? Math.round((trueWins / trueGroup.length) * 100) : null,
+        falseCount: falseGroup.length,
+        falsePct: falseGroup.length ? Math.round((falseWins / falseGroup.length) * 100) : null,
+      }
+    })
+  })()
 
   return (
     <div className="p-6 md:p-8">
@@ -225,7 +232,7 @@ export default function PerformancePage() {
       <div className="bg-[#0B0F14] border border-[#1B232C] rounded-xl p-6 mt-5">
         <div className="font-mono text-[11px] tracking-widest text-[#7C8896] uppercase mb-4">Performance by Timeframe — HTF Confluence</div>
         {byRung.length === 0 ? (
-          <div className="text-[#7C8896] font-mono text-sm">No TP-level outcome data yet — populates once the closed-signal analysis job runs.</div>
+          <div className="text-[#7C8896] font-mono text-sm">No resolved signals yet — populates once the closed-signal analysis job runs.</div>
         ) : (
           byRung.map((t, i) => (
             <div key={i} className="mb-4">
@@ -238,6 +245,40 @@ export default function PerformancePage() {
               </div>
             </div>
           ))
+        )}
+      </div>
+
+      <div className="bg-[#0B0F14] border border-[#1B232C] rounded-xl p-6 mt-5">
+        <div className="font-mono text-[11px] tracking-widest text-[#7C8896] uppercase mb-2">Manual Entry Filter — Win Rate by Condition</div>
+        <div className="font-mono text-[10px] text-[#7C8896] mb-4">
+          Precision signals only. Most informative when the manual entry filter has been toggled off for some period, since that's when each condition varies between true and false instead of always being true.
+        </div>
+        {!byManualCondition ? (
+          <div className="text-[#7C8896] font-mono text-sm">No closed Precision signals with filter data yet.</div>
+        ) : (
+          <div className="space-y-4">
+            {byManualCondition.map((c, i) => (
+              <div key={i} className="flex items-center justify-between font-mono text-xs gap-4">
+                <span className="text-[#EDEFF2] flex-shrink-0 w-56">{c.label}</span>
+                <div className="flex items-center gap-2 flex-1">
+                  <span className="text-[#34D399] w-24">
+                    True: {c.truePct !== null ? c.truePct + '%' : '—'} <span className="text-[#3A434D]">({c.trueCount})</span>
+                  </span>
+                  <div className="flex-1 h-2 bg-[#0F141A] rounded-full overflow-hidden">
+                    <div className="h-full bg-[#34D399]" style={{ width: `${c.truePct ?? 0}%` }} />
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 flex-1">
+                  <span className="text-[#F87171] w-24">
+                    False: {c.falsePct !== null ? c.falsePct + '%' : '—'} <span className="text-[#3A434D]">({c.falseCount})</span>
+                  </span>
+                  <div className="flex-1 h-2 bg-[#0F141A] rounded-full overflow-hidden">
+                    <div className="h-full bg-[#F87171]" style={{ width: `${c.falsePct ?? 0}%` }} />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </div>
 

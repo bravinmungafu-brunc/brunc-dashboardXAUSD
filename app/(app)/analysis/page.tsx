@@ -24,11 +24,6 @@ const VALIDITY_STYLE: Record<string, { color: string; label: string }> = {
   invalid: { color: '#F87171', label: 'INVALID' },
 }
 
-// Persists each button's last result in sessionStorage so navigating to
-// another page and back doesn't lose it -- only clicking the button
-// again replaces what's shown. sessionStorage (not localStorage) means
-// it naturally clears when the browser tab actually closes, rather than
-// showing stale results indefinitely across separate visits.
 const STORAGE_KEYS = {
   assessments: 'brunc:analysis-assessments',
   error: 'brunc:analysis-error',
@@ -143,10 +138,13 @@ export default function AnalysisPage() {
   const updates: any[] = resolveResult?.updates || []
   const successfulCount = updates.filter(u => u.outcome === 'tp_hit').length
   const unsuccessfulCount = updates.filter(u => u.outcome === 'stopped_out').length
+  const deferredCount: number = resolveResult?.deferred ?? 0
 
   function outcomeStyle(outcome: string) {
     if (outcome === 'tp_hit') return { label: 'SUCCESSFUL', className: 'text-[#2B8CE0] bg-[#2B8CE0]/10' }
     if (outcome === 'stopped_out') return { label: 'UNSUCCESSFUL', className: 'text-[#F87171] bg-[#F87171]/10' }
+    if (outcome === 'no_data') return { label: 'NO DATA', className: 'text-[#7C8896] bg-[#7C8896]/10' }
+    if (outcome === 'quota_exceeded') return { label: 'QUOTA REACHED', className: 'text-[#F5A623] bg-[#F5A623]/10' }
     return { label: 'OPEN', className: 'text-[#7C8896] bg-[#7C8896]/10' }
   }
 
@@ -254,6 +252,10 @@ export default function AnalysisPage() {
           )}
         </div>
 
+        <div className="mono text-[10px] text-[#7C8896] mb-3">
+          Walks price bar-by-bar from each signal's creation time to determine whether SL or TP was hit first -- this costs one credit per signal checked, not one credit total, so a run may only process some open signals and pick up the rest next time.
+        </div>
+
         <button onClick={runCloseSignalAnalysis} disabled={resolving || quotaExhausted}
           className="flex items-center gap-2.5 px-5 py-3 bg-[#2DD4BF] hover:bg-[#4ee0cc] disabled:opacity-40 text-[#05070A] font-semibold text-sm rounded-xl transition-all mb-2">
           {resolving ? (
@@ -282,7 +284,7 @@ export default function AnalysisPage() {
             <div className="flex items-center gap-2 mb-4 pb-4 border-b border-[#1C2530]">
               <span className="mono text-[10px] text-[#2DD4BF] tracking-widest uppercase">Resolution Summary</span>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
               <div>
                 <div className="mono text-[9px] text-[#7C8896] uppercase tracking-wide mb-1">Successful</div>
                 <div className="text-2xl font-bold text-[#2B8CE0]">{successfulCount}</div>
@@ -299,7 +301,17 @@ export default function AnalysisPage() {
                 <div className="mono text-[9px] text-[#7C8896] uppercase tracking-wide mb-1">Open</div>
                 <div className="text-2xl font-bold text-[#7C8896]">{resolveResult.stillOpen ?? 0}</div>
               </div>
+              <div>
+                <div className="mono text-[9px] text-[#7C8896] uppercase tracking-wide mb-1">Deferred</div>
+                <div className={`text-2xl font-bold ${deferredCount > 0 ? 'text-[#F5A623]' : 'text-[#7C8896]'}`}>{deferredCount}</div>
+              </div>
             </div>
+
+            {deferredCount > 0 && (
+              <div className="mono text-[10px] text-[#F5A623] mb-4 pb-4 border-b border-[#1C2530]">
+                {deferredCount} open signal{deferredCount === 1 ? '' : 's'} weren't checked this run to stay within a reasonable per-run credit cost — click ANALYSE again to pick up the rest.
+              </div>
+            )}
 
             {updates.length > 0 ? (
               <div className="space-y-1.5 pt-3 border-t border-[#1C2530]">

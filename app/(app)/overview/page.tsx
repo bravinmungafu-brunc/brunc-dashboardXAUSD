@@ -12,10 +12,16 @@ const TIMEFRAMES = [
   { key: '12M', label: 'Year' },
 ]
 
+const TYPE_LABEL: Record<string, string> = {
+  sniper_confirmation: 'Sniper Confirmation',
+  precision: 'Precision',
+}
+
 const POINT_SIZE = 0.01
 function pointsBetween(a: number, b: number) {
   return Math.round(Math.abs(a - b) / POINT_SIZE)
 }
+
 function netPointsForSignal(sig: any): number {
   const entry = sig.entry
   const exits = sig.exits || {}
@@ -23,20 +29,17 @@ function netPointsForSignal(sig: any): number {
   if (sig.final_outcome === 'stopped_out' && exits.sl != null) {
     return -pointsBetween(entry, exits.sl)
   }
-  if (sig.final_outcome === 'tp_hit') {
-    const exitPrice = sig.tp3_hit ? exits.tp3 : sig.tp2_hit ? exits.tp2 : sig.tp1_hit ? exits.tp1 : null
-    if (exitPrice != null) return pointsBetween(entry, exitPrice)
+  if (sig.final_outcome === 'tp_hit' && exits.tp != null) {
+    return pointsBetween(entry, exits.tp)
   }
   return 0
 }
 
 export default function OverviewPage() {
-  // Sourced from the most recent signal's htf_confluence array — Pine's
-  // current schema embeds per-timeframe state in each signal rather than
-  // sending separate box-state pings, so this is the live accurate source.
   const [confluence, setConfluence] = useState<any[]>([])
   const [selectedTf, setSelectedTf] = useState('15')
   const [stats, setStats] = useState<{ open: number; today: number; successRate: string | null; net: number | null }>({ open: 0, today: 0, successRate: null, net: null })
+  const [byType, setByType] = useState<{ type: string; pct: number | null; count: number }[]>([])
 
   const load = useCallback(async () => {
     const { data: latestSignal } = await supabase
@@ -53,13 +56,25 @@ export default function OverviewPage() {
     const thirtyDaysAgo = new Date(); thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
     const { data: resolved } = await supabase
       .from('signals')
-      .select('final_outcome,entry,exits,tp1_hit,tp2_hit,tp3_hit,created_at')
+      .select('final_outcome,entry,exits,signal_type,created_at')
       .eq('status', 'closed')
       .gte('created_at', thirtyDaysAgo.toISOString())
 
     const wins = (resolved || []).filter((s: any) => s.final_outcome && s.final_outcome !== 'stopped_out').length
     const total = (resolved || []).length
     const netPoints = (resolved || []).reduce((sum: number, s: any) => sum + netPointsForSignal(s), 0)
+
+    const types = Array.from(new Set((resolved || []).map((s: any) => s.signal_type).filter(Boolean)))
+    const byTypeStats = types.map(t => {
+      const group = (resolved || []).filter((s: any) => s.signal_type === t)
+      const g = group.filter((s: any) => s.final_outcome && s.final_outcome !== 'stopped_out').length
+      return {
+        type: TYPE_LABEL[t as string] || (t as string).replace(/_/g, ' '),
+        pct: group.length ? Math.round((g / group.length) * 100) : null,
+        count: group.length,
+      }
+    })
+    setByType(byTypeStats)
 
     const todayStart = new Date(); todayStart.setHours(0,0,0,0)
     const { data: todaySignals } = await supabase.from('signals').select('id').gte('created_at', todayStart.toISOString())
@@ -82,7 +97,7 @@ export default function OverviewPage() {
   }, [load])
 
   const selectedState = confluence.find((c: any) => c.tf === selectedTf)
-  const rawState = selectedState?.state // 'bullish' | 'bearish' | 'pending' | undefined
+  const rawState = selectedState?.state
   const hasData = rawState === 'bullish' || rawState === 'bearish'
   const isBullish = rawState === 'bullish'
   const gaugeColor = !hasData ? '#3A434D' : isBullish ? '#34D399' : '#F87171'
@@ -147,7 +162,7 @@ export default function OverviewPage() {
                   {rawState === 'pending' ? 'Pending' : isBullish ? 'Bullish' : 'Bearish'}
                 </span>
                 {' '}— current box-chain state on the {TIMEFRAMES.find(t => t.key === selectedTf)?.label} timeframe
-                {selectedState.fade_active ? ', fade active' : ''}
+                {selectedState.fade_active ? ', price currently outside the box edge' : ''}
                 {selectedState.rejections ? `, ${selectedState.rejections} rejection(s)` : ''}.
               </>
             )}
@@ -169,7 +184,7 @@ export default function OverviewPage() {
                     <div className={`font-mono text-sm font-semibold ${st === 'bullish' ? 'text-[#34D399]' : st === 'bearish' ? 'text-[#F87171]' : 'text-[#7C8896]'}`}>
                       {st === 'bullish' ? 'BULLISH' : st === 'bearish' ? 'BEARISH' : st === 'pending' ? 'PENDING' : '—'}
                     </div>
-                    {c?.fade_active && <div className="font-mono text-[9px] text-[#2DD4BF] mt-0.5">FADE ACTIVE</div>}
+                    {c?.fade_active && <div className="font-mono text-[9px] text-[#2DD4BF] mt-0.5">OUTSIDE EDGE</div>}
                   </div>
                 )
               })}
@@ -177,6 +192,22 @@ export default function OverviewPage() {
           )}
         </div>
       </div>
+
+      {byType.length > 0 && (
+        <div className="bg-[#0B0F14] border border-[#1B232C] rounded-xl p-5 mb-5">
+          <div className="font-mono text-[11px] tracking-widest text-[#7C8896] uppercase mb-3">Success Rate by Signal Type (30d)</div>
+          <div className="flex flex-wrap gap-6">
+            {byType.map((t, i) => (
+              <div key={i}>
+                <div className="font-mono text-[10px] text-[#7C8896]">{t.type}</div>
+                <div className={`text-xl font-bold ${t.pct !== null && t.pct >= 50 ? 'text-[#34D399]' : t.pct !== null ? 'text-[#F87171]' : 'text-white'}`}>
+                  {t.pct !== null ? t.pct + '%' : '—'} <span className="text-[#3A434D] text-xs font-normal">· {t.count}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[

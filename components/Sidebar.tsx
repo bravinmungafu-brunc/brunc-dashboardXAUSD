@@ -9,6 +9,7 @@ const NAV = [
   { href: '/overview', label: 'Overview', icon: 'grid' },
   { href: '/signals', label: 'Signals', icon: 'target' },
   { href: '/performance', label: 'Performance', icon: 'chart' },
+  { href: '/backtest', label: 'Backtest', icon: 'clock' },
   { href: '/analysis', label: 'Analysis', icon: 'spark' },
   { href: '/settings', label: 'Settings', icon: 'gear' },
 ]
@@ -23,6 +24,8 @@ function NavIcon({ type, active }: { type: string; active: boolean }) {
       return <svg {...common}><circle cx="10" cy="10" r="7" stroke={color} strokeWidth="1.5"/><circle cx="10" cy="10" r="3.5" stroke={color} strokeWidth="1.5"/><circle cx="10" cy="10" r="0.75" fill={color}/></svg>
     case 'chart':
       return <svg {...common}><path d="M3 16V9M9 16V4M15 16v-6M3 16h14" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+    case 'clock':
+      return <svg {...common}><circle cx="10" cy="10" r="7.5" stroke={color} strokeWidth="1.5"/><path d="M10 6v4l3 2" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
     case 'spark':
       return <svg {...common}><path d="M10 2l1.8 5.2L17 9l-5.2 1.8L10 16l-1.8-5.2L3 9l5.2-1.8L10 2z" stroke={color} strokeWidth="1.5" strokeLinejoin="round"/></svg>
     case 'gear':

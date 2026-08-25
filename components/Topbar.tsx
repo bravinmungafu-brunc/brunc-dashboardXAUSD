@@ -23,17 +23,54 @@ function getKenyaTime() {
   }).format(new Date())
 }
 
+function formatAgo(ms: number): string {
+  const mins = Math.floor(ms / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  return `${Math.floor(hrs / 24)}d ago`
+}
+
+function stalenessColor(ms: number | null): string {
+  if (ms == null) return '#7C8896'
+  const hours = ms / 3_600_000
+  if (hours < 12) return '#34D399'
+  if (hours < 48) return '#F59E0B'
+  return '#F87171'
+}
+
 export default function Topbar() {
   const [session, setSession] = useState('—')
   const [eatTime, setEatTime] = useState('—')
+  const [lastSignalMs, setLastSignalMs] = useState<number | null>(null)
+  const [lastSignalKnown, setLastSignalKnown] = useState(false)
   const router = useRouter()
 
   useEffect(() => {
     setSession(getSession())
     setEatTime(getKenyaTime())
+
+    async function checkLastSignal() {
+      const { data } = await supabase
+        .from('signals')
+        .select('created_at')
+        .order('created_at', { ascending: false })
+        .limit(1)
+      const latest = data?.[0]?.created_at
+      if (latest) {
+        setLastSignalMs(Date.now() - new Date(latest).getTime())
+        setLastSignalKnown(true)
+      } else {
+        setLastSignalKnown(true)
+      }
+    }
+    checkLastSignal()
+
     const interval = setInterval(() => {
       setSession(getSession())
       setEatTime(getKenyaTime())
+      setLastSignalMs(prev => (prev == null ? null : prev + 30000))
     }, 30000)
     return () => clearInterval(interval)
   }, [])
@@ -42,6 +79,8 @@ export default function Topbar() {
     await supabase.auth.signOut()
     router.push('/login')
   }
+
+  const dotColor = stalenessColor(lastSignalMs)
 
   return (
     <div>
@@ -52,6 +91,15 @@ export default function Topbar() {
         </span>
         <span className="text-white flex-shrink-0">— live price pending</span>
         <span className="text-[#7C8896] hidden sm:inline flex-shrink-0">{eatTime} EAT</span>
+
+        {lastSignalKnown && (
+          <span className="flex items-center gap-1.5 flex-shrink-0" title="Time since the last signal was received from TradingView">
+            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: dotColor }} />
+            <span className="hidden sm:inline text-[#7C8896]">Last signal:</span>
+            <span style={{ color: dotColor }}>{lastSignalMs == null ? 'none yet' : formatAgo(lastSignalMs)}</span>
+          </span>
+        )}
+
         <span className="ml-auto border border-[#1B232C] rounded px-2 md:px-2.5 py-1 text-[#2DD4BF] flex-shrink-0">
           <span className="hidden md:inline">SESSION: </span>{session}
         </span>
