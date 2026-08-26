@@ -25,6 +25,7 @@ interface ConfigResult {
   summary: {
     total: number; wins: number; losses: number; stillOpen: number; winRate: number | null
     byType: Record<string, { total: number; wins: number; winRate: number | null }>
+    byPath: Record<string, { total: number; wins: number; winRate: number | null }>
   }
   signals: any[]
 }
