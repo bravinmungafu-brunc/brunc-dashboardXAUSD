@@ -113,6 +113,8 @@ export interface BacktestSummary {
   losses: number
   stillOpen: number
   winRate: number | null
+  netPoints: number
+  avgPointsPerSignal: number | null
   byType: Record<string, { total: number; wins: number; winRate: number | null }>
   byPath: Record<string, { total: number; wins: number; winRate: number | null }>
 }
@@ -800,6 +802,20 @@ export function summarize(signals: SimulatedSignal[]): BacktestSummary {
   const losses = resolved.filter(s => s.outcome === 'stopped_out').length
   const stillOpen = signals.length - resolved.length
 
+  // Same point convention as the rest of the dashboard (Performance,
+  // Overview): POINT_SIZE = 0.01 for XAUUSD. A win realizes the full
+  // entry-to-TP distance; a loss realizes the full entry-to-SL distance
+  // as a negative. Still-open signals contribute nothing, since nothing
+  // was actually realized.
+  const POINT_SIZE = 0.01
+  const pointsBetween = (a: number, b: number) => Math.round(Math.abs(a - b) / POINT_SIZE)
+  const netPoints = resolved.reduce((sum, s) => {
+    if (s.outcome === 'tp_hit') return sum + pointsBetween(s.entry, s.tp)
+    if (s.outcome === 'stopped_out') return sum - pointsBetween(s.entry, s.sl)
+    return sum
+  }, 0)
+  const avgPointsPerSignal = resolved.length ? Math.round((netPoints / resolved.length) * 10) / 10 : null
+
   const byType: BacktestSummary['byType'] = {}
   for (const key of ['precision', 'sniper_confirmation']) {
     const group = resolved.filter(s => s.signalType === key)
@@ -820,6 +836,8 @@ export function summarize(signals: SimulatedSignal[]): BacktestSummary {
     losses,
     stillOpen,
     winRate: resolved.length ? Math.round((wins / resolved.length) * 1000) / 10 : null,
+    netPoints,
+    avgPointsPerSignal,
     byType,
     byPath,
   }

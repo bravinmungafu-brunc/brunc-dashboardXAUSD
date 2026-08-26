@@ -14,6 +14,8 @@ const NAV = [
   { href: '/settings', label: 'Settings', icon: 'gear' },
 ]
 
+const STALE_OPEN_HOURS = 48
+
 function NavIcon({ type, active }: { type: string; active: boolean }) {
   const color = active ? '#2DD4BF' : '#7C8896'
   const common = { width: 20, height: 20, viewBox: '0 0 20 20', fill: 'none' }
@@ -39,6 +41,7 @@ export default function Sidebar() {
   const pathname = usePathname()
   const router = useRouter()
   const [hasNewSignal, setHasNewSignal] = useState(false)
+  const [hasStaleOpen, setHasStaleOpen] = useState(false)
 
   async function handleLogout() {
     await supabase.auth.signOut()
@@ -60,9 +63,24 @@ export default function Sidebar() {
     }
     checkForNew()
 
+    async function checkStaleOpen() {
+      const cutoff = new Date(Date.now() - STALE_OPEN_HOURS * 3_600_000).toISOString()
+      const { data } = await supabase
+        .from('signals')
+        .select('id')
+        .eq('status', 'open')
+        .lt('created_at', cutoff)
+        .limit(1)
+      setHasStaleOpen(!!data && data.length > 0)
+    }
+    checkStaleOpen()
+
     const channel = supabase.channel('sidebar-signal-watch')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'signals' }, () => {
         setHasNewSignal(true)
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'signals' }, () => {
+        checkStaleOpen()
       })
       .subscribe()
     return () => { supabase.removeChannel(channel) }
@@ -91,10 +109,10 @@ export default function Sidebar() {
         <ul className="flex flex-col gap-1 flex-1">
           {NAV.map(item => {
             const active = pathname === item.href
-            const showDot = item.href === '/signals' && hasNewSignal
+            const showDot = (item.href === '/signals' && hasNewSignal) || (item.href === '/analysis' && hasStaleOpen)
             return (
               <li key={item.href} className="relative">
-                {showDot && <span className="absolute top-1 left-6 w-2 h-2 rounded-full bg-[#F87171] z-10" />}
+                {showDot && <span className="absolute top-1 left-6 w-2 h-2 rounded-full bg-[#F87171] z-10" title={item.href === '/analysis' ? `Open signals older than ${STALE_OPEN_HOURS}h haven't been checked yet` : undefined} />}
                 <Link href={item.href}
                   className={`flex items-center gap-2.5 px-4 py-2.5 rounded-lg text-sm whitespace-nowrap ${
                     active ? 'bg-[#14625A]/30 text-white' : 'text-[#7C8896] hover:text-white hover:bg-[#0F141A]'
@@ -119,7 +137,7 @@ export default function Sidebar() {
         <ul className="flex items-stretch justify-between px-1">
           {NAV.map(item => {
             const active = pathname === item.href
-            const showDot = item.href === '/signals' && hasNewSignal
+            const showDot = (item.href === '/signals' && hasNewSignal) || (item.href === '/analysis' && hasStaleOpen)
             return (
               <li key={item.href} className="flex-1 relative">
                 {showDot && <span className="absolute top-1 right-1/2 translate-x-3 w-2 h-2 rounded-full bg-[#F87171] z-10" />}

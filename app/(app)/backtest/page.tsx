@@ -24,6 +24,7 @@ interface ConfigResult {
   params: Record<string, any>
   summary: {
     total: number; wins: number; losses: number; stillOpen: number; winRate: number | null
+    netPoints: number; avgPointsPerSignal: number | null
     byType: Record<string, { total: number; wins: number; winRate: number | null }>
     byPath: Record<string, { total: number; wins: number; winRate: number | null }>
   }
@@ -140,7 +141,7 @@ export default function BacktestPage() {
           </div>
         </div>
         <div className="font-mono text-[10px] text-[#7C8896] mb-5">
-          Longer ranges cost more Twelve Data credits (1-minute data especially) -- keep this short (a few days to ~2 weeks) unless you specifically need more history.
+          Longer ranges cost more Twelve Data credits (1-minute data especially) -- keep this short (a few days to ~2 weeks) unless you specifically need more history. Also worth knowing: TradingView's Bar Replay on a 1-minute chart typically only reaches back a handful of days regardless of plan -- for verifying an older flagged signal, you may need to check it on a coarser timeframe instead.
         </div>
 
         <div className="flex items-center justify-between mb-3">
@@ -217,10 +218,22 @@ export default function BacktestPage() {
                 targetRR {r.params.targetRR} · htfMidRejMinCount {r.params.htfMidRejMinCount} · manual filter {r.params.useManualEntryFilter ? 'on' : 'off'} · DXY {r.params.useDxyFilter ? 'on' : 'off'}
               </div>
 
-              <div className="flex items-center gap-6 mb-5">
+              <div className="flex items-center gap-6 mb-5 flex-wrap">
                 <div>
                   <div className="text-2xl font-bold text-[#34D399]">{r.summary.winRate !== null ? r.summary.winRate + '%' : '—'}</div>
                   <div className="font-mono text-[10px] text-[#7C8896]">win rate</div>
+                </div>
+                <div>
+                  <div className={`text-2xl font-bold ${r.summary.netPoints > 0 ? 'text-[#34D399]' : r.summary.netPoints < 0 ? 'text-[#F87171]' : 'text-white'}`}>
+                    {r.summary.netPoints > 0 ? '+' : ''}{r.summary.netPoints}
+                  </div>
+                  <div className="font-mono text-[10px] text-[#7C8896]">net points</div>
+                </div>
+                <div>
+                  <div className={`text-2xl font-bold ${r.summary.avgPointsPerSignal !== null && r.summary.avgPointsPerSignal > 0 ? 'text-[#34D399]' : r.summary.avgPointsPerSignal !== null && r.summary.avgPointsPerSignal < 0 ? 'text-[#F87171]' : 'text-white'}`}>
+                    {r.summary.avgPointsPerSignal !== null ? (r.summary.avgPointsPerSignal > 0 ? '+' : '') + r.summary.avgPointsPerSignal : '—'}
+                  </div>
+                  <div className="font-mono text-[10px] text-[#7C8896]">avg pts / signal</div>
                 </div>
                 <div className="flex gap-4 font-mono text-xs">
                   <div className="text-center"><div className="text-[#34D399] font-bold">{r.summary.wins}</div><div className="text-[9px] text-[#7C8896]">wins</div></div>
@@ -274,6 +287,9 @@ export default function BacktestPage() {
                               <div>Grade {sig.gradeValue}/7 · HTF rung {sig.htfRung} · exec {sig.execTf}m</div>
                               {sig.manualFilterPassed !== null && <div>Manual filter: {sig.manualFilterPassed ? 'passed' : 'failed'}</div>}
                               {sig.barsToResolve != null && <div>Resolved in {sig.barsToResolve} bars</div>}
+                              <div className="text-[#2DD4BF] pt-1">
+                                Bar Replay: jump to {new Date(sig.time).toISOString().replace('T', ' ').slice(0, 16)} UTC on the {sig.execTf}m chart to verify this against the real chart.
+                              </div>
                             </div>
                           )}
                         </div>

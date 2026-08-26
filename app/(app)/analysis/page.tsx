@@ -29,6 +29,8 @@ const STORAGE_KEYS = {
   error: 'brunc:analysis-error',
   resolveResult: 'brunc:resolve-result',
   resolveError: 'brunc:resolve-error',
+  patterns: 'brunc:closed-patterns',
+  patternsError: 'brunc:closed-patterns-error',
 }
 
 function readStored<T>(key: string): T | null {
@@ -67,11 +69,17 @@ export default function AnalysisPage() {
   const [resolveResult, setResolveResult] = useState<any>(null)
   const [quota, setQuota] = useState<{ used: number; limit: number } | null>(null)
 
+  const [patternsLoading, setPatternsLoading] = useState(false)
+  const [patternsError, setPatternsError] = useState('')
+  const [patternsResult, setPatternsResult] = useState<any>(null)
+
   useEffect(() => {
     setAssessments(readStored<Assessment[]>(STORAGE_KEYS.assessments))
     setError(readStored<string>(STORAGE_KEYS.error) || '')
     setResolveResult(readStored<any>(STORAGE_KEYS.resolveResult))
     setResolveError(readStored<string>(STORAGE_KEYS.resolveError) || '')
+    setPatternsResult(readStored<any>(STORAGE_KEYS.patterns))
+    setPatternsError(readStored<string>(STORAGE_KEYS.patternsError) || '')
   }, [])
 
   useEffect(() => {
@@ -83,7 +91,7 @@ export default function AnalysisPage() {
 
   const quotaExhausted = quota != null && quota.used >= quota.limit
 
-  async function runAnalysis() {
+  async function runValidityCheck() {
     setLoading(true)
     setError('')
     setAssessments(null)
@@ -135,16 +143,43 @@ export default function AnalysisPage() {
     setResolving(false)
   }
 
+  async function runPatternSummary() {
+    setPatternsLoading(true)
+    setPatternsError('')
+    setPatternsResult(null)
+    try {
+      const res = await fetch('/api/closed-signal-analysis')
+      const data = await res.json()
+      if (data.error) {
+        setPatternsError(data.error)
+        writeStored(STORAGE_KEYS.patternsError, data.error)
+        writeStored(STORAGE_KEYS.patterns, null)
+      } else {
+        setPatternsResult(data)
+        writeStored(STORAGE_KEYS.patterns, data)
+        writeStored(STORAGE_KEYS.patternsError, null)
+      }
+    } catch {
+      const msg = 'Could not reach the pattern analysis service.'
+      setPatternsError(msg)
+      writeStored(STORAGE_KEYS.patternsError, msg)
+      writeStored(STORAGE_KEYS.patterns, null)
+    }
+    setPatternsLoading(false)
+  }
+
   const updates: any[] = resolveResult?.updates || []
   const successfulCount = updates.filter(u => u.outcome === 'tp_hit').length
   const unsuccessfulCount = updates.filter(u => u.outcome === 'stopped_out').length
   const deferredCount: number = resolveResult?.deferred ?? 0
+  const malformedCount: number = resolveResult?.malformed ?? 0
 
   function outcomeStyle(outcome: string) {
     if (outcome === 'tp_hit') return { label: 'SUCCESSFUL', className: 'text-[#2B8CE0] bg-[#2B8CE0]/10' }
     if (outcome === 'stopped_out') return { label: 'UNSUCCESSFUL', className: 'text-[#F87171] bg-[#F87171]/10' }
     if (outcome === 'no_data') return { label: 'NO DATA', className: 'text-[#7C8896] bg-[#7C8896]/10' }
     if (outcome === 'quota_exceeded') return { label: 'QUOTA REACHED', className: 'text-[#F5A623] bg-[#F5A623]/10' }
+    if (outcome === 'malformed_exits') return { label: 'MISSING SL/TP', className: 'text-[#F5A623] bg-[#F5A623]/10' }
     return { label: 'OPEN', className: 'text-[#7C8896] bg-[#7C8896]/10' }
   }
 
@@ -182,12 +217,16 @@ export default function AnalysisPage() {
         </div>
       </div>
 
-      <button onClick={runAnalysis} disabled={loading}
+      <div className="mono text-[10px] text-[#7C8896] mb-3">
+        Checks whether your currently OPEN signals still look valid given live market conditions and news -- doesn't determine win/loss (that's ANALYSE, further down).
+      </div>
+
+      <button onClick={runValidityCheck} disabled={loading}
         className="flex items-center gap-2.5 px-5 py-3 bg-[#2B8CE0] hover:bg-[#3a9cf0] disabled:opacity-50 text-white font-semibold text-sm rounded-xl transition-all mb-5">
         {loading ? (
           <>
             <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full inline-block" style={{ animation: 'spin 0.7s linear infinite' }} />
-            Analyzing signals &amp; news…
+            Checking signals &amp; news…
           </>
         ) : (
           <>
@@ -195,7 +234,7 @@ export default function AnalysisPage() {
               <path d="M7 1v2M7 11v2M1 7h2M11 7h2M2.5 2.5l1.5 1.5M10 10l1.5 1.5M2.5 11.5L4 10M10 4l1.5-1.5" stroke="white" strokeWidth="1.5" strokeLinecap="round"/>
               <circle cx="7" cy="7" r="2.5" stroke="white" strokeWidth="1.5"/>
             </svg>
-            Run AI Analysis
+            Check Open Signal Validity
           </>
         )}
       </button>
@@ -232,7 +271,7 @@ export default function AnalysisPage() {
       {!assessments && !loading && !error && (
         <div className="bg-[#0D1218] border border-[#1C2530] border-dashed rounded-2xl p-10 text-center">
           <div className="mono text-[11px] text-[#7C8896]">
-            Click &quot;Run AI Analysis&quot; to generate per-signal insights from open signals and current market context.
+            Click &quot;Check Open Signal Validity&quot; to generate per-signal insights from open signals and current market context.
           </div>
         </div>
       )}
@@ -253,7 +292,7 @@ export default function AnalysisPage() {
         </div>
 
         <div className="mono text-[10px] text-[#7C8896] mb-3">
-          Walks price bar-by-bar from each signal's creation time to determine whether SL or TP was hit first -- this costs one credit per signal checked, not one credit total, so a run may only process some open signals and pick up the rest next time.
+          Walks price bar-by-bar from each signal's creation time to determine whether SL or TP was hit first, continuing forward across multiple data pages for older signals rather than stopping after the first ~3.5 days -- this costs one credit per page checked, not one credit total, so a run may only process some open signals and pick up the rest next time.
         </div>
 
         <button onClick={runCloseSignalAnalysis} disabled={resolving || quotaExhausted}
@@ -284,7 +323,7 @@ export default function AnalysisPage() {
             <div className="flex items-center gap-2 mb-4 pb-4 border-b border-[#1C2530]">
               <span className="mono text-[10px] text-[#2DD4BF] tracking-widest uppercase">Resolution Summary</span>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
+            <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-4">
               <div>
                 <div className="mono text-[9px] text-[#7C8896] uppercase tracking-wide mb-1">Successful</div>
                 <div className="text-2xl font-bold text-[#2B8CE0]">{successfulCount}</div>
@@ -305,11 +344,21 @@ export default function AnalysisPage() {
                 <div className="mono text-[9px] text-[#7C8896] uppercase tracking-wide mb-1">Deferred</div>
                 <div className={`text-2xl font-bold ${deferredCount > 0 ? 'text-[#F5A623]' : 'text-[#7C8896]'}`}>{deferredCount}</div>
               </div>
+              <div>
+                <div className="mono text-[9px] text-[#7C8896] uppercase tracking-wide mb-1">Missing SL/TP</div>
+                <div className={`text-2xl font-bold ${malformedCount > 0 ? 'text-[#F5A623]' : 'text-[#7C8896]'}`}>{malformedCount}</div>
+              </div>
             </div>
 
             {deferredCount > 0 && (
               <div className="mono text-[10px] text-[#F5A623] mb-4 pb-4 border-b border-[#1C2530]">
                 {deferredCount} open signal{deferredCount === 1 ? '' : 's'} weren't checked this run to stay within a reasonable per-run credit cost — click ANALYSE again to pick up the rest.
+              </div>
+            )}
+
+            {malformedCount > 0 && (
+              <div className="mono text-[10px] text-[#F5A623] mb-4 pb-4 border-b border-[#1C2530]">
+                {malformedCount} open signal{malformedCount === 1 ? '' : 's'} had no SL or TP recorded at all -- these can never be resolved and are worth checking directly in Supabase.
               </div>
             )}
 
@@ -337,6 +386,66 @@ export default function AnalysisPage() {
           <div className="bg-[#0D1218] border border-[#1C2530] border-dashed rounded-2xl p-10 text-center mt-3">
             <div className="mono text-[11px] text-[#7C8896]">
               Click &quot;ANALYSE&quot; to pull live market data from Twelve Data and mark each closed-window signal as a win or loss. Results feed the Performance page.
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="mt-10 pt-8 border-t border-[#1C2530]">
+        <div className="mb-5">
+          <div className="mono text-[10px] tracking-[0.3em] text-[#F5A623] uppercase mb-1">Deterministic, Not AI-Generated</div>
+          <h2 className="text-xl font-bold text-white">
+            Closed Signal Patterns <span className="text-[#7C8896] font-normal text-sm ml-2">— real counts from your actual closed signals</span>
+          </h2>
+        </div>
+
+        <div className="mono text-[10px] text-[#7C8896] mb-3">
+          No AI involved in this section on purpose -- every statement below is a real, computed count with its own real sample size shown alongside it. Treat these as patterns worth a closer look, not proof, especially with small sample sizes.
+        </div>
+
+        <button onClick={runPatternSummary} disabled={patternsLoading}
+          className="flex items-center gap-2.5 px-5 py-3 bg-[#F5A623] hover:bg-[#ffb84d] disabled:opacity-50 text-[#05070A] font-semibold text-sm rounded-xl transition-all mb-2">
+          {patternsLoading ? (
+            <>
+              <span className="w-4 h-4 border-2 border-[#05070A]/30 border-t-[#05070A] rounded-full inline-block" style={{ animation: 'spin 0.7s linear infinite' }} />
+              Computing patterns…
+            </>
+          ) : (
+            <>Find Patterns in Closed Signals</>
+          )}
+        </button>
+
+        {patternsError && (
+          <div className="bg-[#E5555A]/10 border border-[#E5555A]/25 rounded-2xl px-5 py-4 mono text-xs text-[#E5555A] mb-4 mt-3">
+            {patternsError}
+          </div>
+        )}
+
+        {patternsResult && (
+          <div className="bg-[#0D1218] border border-[#1C2530] rounded-2xl p-6 fade-up mt-3">
+            <div className="mono text-[10px] text-[#7C8896] mb-4">
+              {patternsResult.totalClosed} closed signals total — {patternsResult.totalWins} wins, {patternsResult.totalLosses} losses.
+            </div>
+
+            {patternsResult.patterns && patternsResult.patterns.length > 0 ? (
+              <div className="space-y-3">
+                {patternsResult.patterns.map((p: string, i: number) => (
+                  <div key={i} className="flex gap-2.5 text-sm text-[#EDEFF2] leading-relaxed">
+                    <span className="text-[#F5A623] flex-shrink-0">•</span>
+                    <span>{p}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="mono text-[11px] text-[#7C8896]">{patternsResult.note}</div>
+            )}
+          </div>
+        )}
+
+        {!patternsResult && !patternsLoading && !patternsError && (
+          <div className="bg-[#0D1218] border border-[#1C2530] border-dashed rounded-2xl p-10 text-center mt-3">
+            <div className="mono text-[11px] text-[#7C8896]">
+              Click &quot;Find Patterns in Closed Signals&quot; to check real closed signals for anything worth bringing back for a Pine change.
             </div>
           </div>
         )}
