@@ -1,6 +1,6 @@
 // lib/backtest/engine.ts
 //
-// A hand-ported TypeScript replica of BRUNC AI SNIPER SIGNALS (Stage 11
+// A hand-ported TypeScript replica of BRUNC AI SNIPER SIGNALS (Stage 12
 // Pine script), built specifically so historical price data can be
 // walked through the same logic the live script uses, without needing
 // TradingView to execute it.
@@ -18,7 +18,7 @@
 // since a backtest has no single equivalent of the live chart TF Pine
 // normally reads ta.atr() from.
 //
-// REVISION NOTE: the first draft of this file computed Setup A's
+// REVISION NOTE 1: the first draft of this file computed Setup A's
 // anyExecSellBOS/anyExecBuyBOS as a bare "did a BOS happen on this bar"
 // check, skipping Pine's actual requirement that the exec timeframe
 // must first be ARMED by a qualifying CSOD before a BOS counts. Setup B
@@ -26,6 +26,17 @@
 // (anyExecBuyCSOD/anyExecSellCSOD to know when to realign), and porting
 // it properly for Setup B surfaced the gap in Setup A -- both are now
 // fixed using one correctly-shared tracker, matching f_execCsodBosTracker.
+//
+// REVISION NOTE 2 (matches Stage 12 Pine fix): both exit-calculation
+// functions had a real bug ported faithfully from the pre-fix Pine
+// logic -- Setup A's own firing condition requires price to have
+// ALREADY moved past the referenced box edge before it can qualify, so
+// using that edge as the SL reference put SL on the WRONG side of
+// entry for every Setup A signal (below entry on a sell, above entry
+// on a buy). Backtests run before this fix would have shown meaningless
+// results for every Setup A signal. Both functions now fall back to
+// the pure ATR-distance SL whenever the box-edge-derived value lands on
+// the wrong side, exactly mirroring the live Pine fix.
 //
 // Treat results as informative, not proven correct, until cross-checked
 // against real signals accumulating from the live script over time.
@@ -365,9 +376,11 @@ function calcExitsHtfSourced(
     : (swingRef != null && swingRef > boxEdge && swingRef < price ? swingRef : boxEdge)
 
   const bufferedSL = direction === 'sell' ? rawSL + slBufferUnits : rawSL - slBufferUnits
+
+  const slOnCorrectSide = direction === 'sell' ? bufferedSL > price : bufferedSL < price
   const sl = direction === 'sell'
-    ? Math.min(bufferedSL, price + maxSLDistance)
-    : Math.max(bufferedSL, price - maxSLDistance)
+    ? (slOnCorrectSide ? Math.min(bufferedSL, price + maxSLDistance) : price + maxSLDistance)
+    : (slOnCorrectSide ? Math.max(bufferedSL, price - maxSLDistance) : price - maxSLDistance)
 
   const riskDist = Math.abs(price - sl)
   const tp = direction === 'sell' ? price - riskDist * params.targetRR : price + riskDist * params.targetRR
@@ -382,7 +395,12 @@ function calcExitsMidpointSourced(
   const slBufferUnits = atr * params.atrBufferMult
   const midpoint = (srcHigh + srcLow) / 2
   const rawSL = direction === 'buy' ? midpoint - slBufferUnits : midpoint + slBufferUnits
-  const sl = direction === 'buy' ? Math.max(rawSL, price - maxSLDistance) : Math.min(rawSL, price + maxSLDistance)
+
+  const slOnCorrectSide = direction === 'buy' ? rawSL < price : rawSL > price
+  const sl = direction === 'buy'
+    ? (slOnCorrectSide ? Math.max(rawSL, price - maxSLDistance) : price - maxSLDistance)
+    : (slOnCorrectSide ? Math.min(rawSL, price + maxSLDistance) : price + maxSLDistance)
+
   const riskDist = Math.abs(price - sl)
   const tp = direction === 'buy' ? price + riskDist * params.targetRR : price - riskDist * params.targetRR
   return { sl, tp }
@@ -802,11 +820,6 @@ export function summarize(signals: SimulatedSignal[]): BacktestSummary {
   const losses = resolved.filter(s => s.outcome === 'stopped_out').length
   const stillOpen = signals.length - resolved.length
 
-  // Same point convention as the rest of the dashboard (Performance,
-  // Overview): POINT_SIZE = 0.01 for XAUUSD. A win realizes the full
-  // entry-to-TP distance; a loss realizes the full entry-to-SL distance
-  // as a negative. Still-open signals contribute nothing, since nothing
-  // was actually realized.
   const POINT_SIZE = 0.01
   const pointsBetween = (a: number, b: number) => Math.round(Math.abs(a - b) / POINT_SIZE)
   const netPoints = resolved.reduce((sum, s) => {
