@@ -8,6 +8,8 @@ import { supabase } from '@/lib/supabaseClient'
 const NAV = [
   { href: '/overview', label: 'Overview', icon: 'grid' },
   { href: '/signals', label: 'Signals', icon: 'target' },
+  { href: '/analysed-signals', label: 'Analysed Signals', icon: 'check' },
+  { href: '/news-signals', label: 'News Signals', icon: 'news' },
   { href: '/performance', label: 'Performance', icon: 'chart' },
   { href: '/backtest', label: 'Backtest', icon: 'clock' },
   { href: '/analysis', label: 'Analysis', icon: 'spark' },
@@ -24,6 +26,10 @@ function NavIcon({ type, active }: { type: string; active: boolean }) {
       return <svg {...common}><rect x="2" y="2" width="7" height="7" rx="1.5" stroke={color} strokeWidth="1.5"/><rect x="11" y="2" width="7" height="7" rx="1.5" stroke={color} strokeWidth="1.5"/><rect x="2" y="11" width="7" height="7" rx="1.5" stroke={color} strokeWidth="1.5"/><rect x="11" y="11" width="7" height="7" rx="1.5" stroke={color} strokeWidth="1.5"/></svg>
     case 'target':
       return <svg {...common}><circle cx="10" cy="10" r="7" stroke={color} strokeWidth="1.5"/><circle cx="10" cy="10" r="3.5" stroke={color} strokeWidth="1.5"/><circle cx="10" cy="10" r="0.75" fill={color}/></svg>
+    case 'check':
+      return <svg {...common}><circle cx="10" cy="10" r="7.5" stroke={color} strokeWidth="1.5"/><path d="M6.5 10l2.2 2.2 4.8-4.8" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+    case 'news':
+      return <svg {...common}><rect x="2.5" y="4" width="12" height="12" rx="1.5" stroke={color} strokeWidth="1.5"/><path d="M15.5 7v7a1.5 1.5 0 01-1.5 1.5H5" stroke={color} strokeWidth="1.5" strokeLinecap="round"/><path d="M5.5 7.5h6M5.5 10h6M5.5 12.5h3.5" stroke={color} strokeWidth="1.3" strokeLinecap="round"/></svg>
     case 'chart':
       return <svg {...common}><path d="M3 16V9M9 16V4M15 16v-6M3 16h14" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
     case 'clock':
@@ -42,6 +48,7 @@ export default function Sidebar() {
   const router = useRouter()
   const [hasNewSignal, setHasNewSignal] = useState(false)
   const [hasStaleOpen, setHasStaleOpen] = useState(false)
+  const [newsWindowActive, setNewsWindowActive] = useState(false)
 
   async function handleLogout() {
     await supabase.auth.signOut()
@@ -75,6 +82,16 @@ export default function Sidebar() {
     }
     checkStaleOpen()
 
+    // TODO: replace with a real check against the once-daily cached
+    // calendar table -- compare current UTC time against each cached
+    // event's window (e.g. +/- 15 min). No live API call needed here,
+    // this is a pure local time comparison against already-fetched data.
+    async function checkNewsWindow() {
+      setNewsWindowActive(false)
+    }
+    checkNewsWindow()
+    const newsInterval = setInterval(checkNewsWindow, 60000)
+
     const channel = supabase.channel('sidebar-signal-watch')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'signals' }, () => {
         setHasNewSignal(true)
@@ -83,7 +100,7 @@ export default function Sidebar() {
         checkStaleOpen()
       })
       .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    return () => { supabase.removeChannel(channel); clearInterval(newsInterval) }
   }, [])
 
   useEffect(() => {
@@ -92,6 +109,17 @@ export default function Sidebar() {
       setHasNewSignal(false)
     }
   }, [pathname])
+
+  function renderDot(item: typeof NAV[number], mobile: boolean) {
+    if (item.href === '/news-signals' && newsWindowActive) {
+      const pos = mobile ? 'top-1 right-1/2 translate-x-3' : 'top-1 left-6'
+      return <span className={`absolute ${pos} w-2 h-2 rounded-full bg-[#2B8CE0] animate-pulse z-10`} title="News window is active" />
+    }
+    const showRedDot = (item.href === '/signals' && hasNewSignal) || (item.href === '/analysis' && hasStaleOpen)
+    if (!showRedDot) return null
+    const pos = mobile ? 'top-1 right-1/2 translate-x-3' : 'top-1 left-6'
+    return <span className={`absolute ${pos} w-2 h-2 rounded-full bg-[#F87171] z-10`} title={item.href === '/analysis' ? `Open signals older than ${STALE_OPEN_HOURS}h haven't been checked yet` : undefined} />
+  }
 
   return (
     <>
@@ -106,13 +134,12 @@ export default function Sidebar() {
           </div>
         </div>
 
-        <ul className="flex flex-col gap-1 flex-1">
+        <ul className="flex flex-col gap-1 flex-1 overflow-y-auto">
           {NAV.map(item => {
             const active = pathname === item.href
-            const showDot = (item.href === '/signals' && hasNewSignal) || (item.href === '/analysis' && hasStaleOpen)
             return (
               <li key={item.href} className="relative">
-                {showDot && <span className="absolute top-1 left-6 w-2 h-2 rounded-full bg-[#F87171] z-10" title={item.href === '/analysis' ? `Open signals older than ${STALE_OPEN_HOURS}h haven't been checked yet` : undefined} />}
+                {renderDot(item, false)}
                 <Link href={item.href}
                   className={`flex items-center gap-2.5 px-4 py-2.5 rounded-lg text-sm whitespace-nowrap ${
                     active ? 'bg-[#14625A]/30 text-white' : 'text-[#7C8896] hover:text-white hover:bg-[#0F141A]'
@@ -134,15 +161,14 @@ export default function Sidebar() {
       </nav>
 
       <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-[#05070A] border-t border-[#1B232C]" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
-        <ul className="flex items-stretch justify-between px-1">
+        <ul className="flex items-stretch justify-between px-1 overflow-x-auto">
           {NAV.map(item => {
             const active = pathname === item.href
-            const showDot = (item.href === '/signals' && hasNewSignal) || (item.href === '/analysis' && hasStaleOpen)
             return (
-              <li key={item.href} className="flex-1 relative">
-                {showDot && <span className="absolute top-1 right-1/2 translate-x-3 w-2 h-2 rounded-full bg-[#F87171] z-10" />}
+              <li key={item.href} className="flex-1 relative min-w-[64px]">
+                {renderDot(item, true)}
                 <Link href={item.href}
-                  className={`flex flex-col items-center justify-center gap-1 py-2.5 text-[10px] font-mono ${
+                  className={`flex flex-col items-center justify-center gap-1 py-2.5 text-[9px] font-mono ${
                     active ? 'text-[#2DD4BF]' : 'text-[#7C8896]'
                   }`}>
                   <NavIcon type={item.icon} active={active} />

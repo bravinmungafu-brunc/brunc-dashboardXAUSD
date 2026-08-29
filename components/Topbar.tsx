@@ -5,7 +5,6 @@ import { supabase } from '@/lib/supabaseClient'
 
 function getSession() {
   const h = new Date().getUTCHours()
-  const isAsian = h >= 22 || h < 8
   const isLondon = h >= 8 && h < 17
   const isNewYork = h >= 13 && h < 22
   if (isLondon && isNewYork) return 'LONDON/NY OVERLAP'
@@ -45,6 +44,8 @@ export default function Topbar() {
   const [eatTime, setEatTime] = useState('—')
   const [lastSignalMs, setLastSignalMs] = useState<number | null>(null)
   const [lastSignalKnown, setLastSignalKnown] = useState(false)
+  const [newsWindowActive, setNewsWindowActive] = useState(false)
+  const [newsEventLabel, setNewsEventLabel] = useState('')
   const router = useRouter()
 
   useEffect(() => {
@@ -67,10 +68,20 @@ export default function Topbar() {
     }
     checkLastSignal()
 
+    // TODO: replace with a real check against the once-daily cached
+    // calendar table, same logic as Sidebar's checkNewsWindow -- pure
+    // local time comparison, no live API call needed per check.
+    async function checkNewsWindow() {
+      setNewsWindowActive(false)
+      setNewsEventLabel('')
+    }
+    checkNewsWindow()
+
     const interval = setInterval(() => {
       setSession(getSession())
       setEatTime(getKenyaTime())
       setLastSignalMs(prev => (prev == null ? null : prev + 30000))
+      checkNewsWindow()
     }, 30000)
     return () => clearInterval(interval)
   }, [])
@@ -97,6 +108,13 @@ export default function Topbar() {
             <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: dotColor }} />
             <span className="hidden sm:inline text-[#7C8896]">Last signal:</span>
             <span style={{ color: dotColor }}>{lastSignalMs == null ? 'none yet' : formatAgo(lastSignalMs)}</span>
+          </span>
+        )}
+
+        {newsWindowActive && (
+          <span className="flex items-center gap-1.5 flex-shrink-0 px-2 py-1 rounded border border-[#2B8CE0]/40 bg-[#2B8CE0]/10" title={newsEventLabel}>
+            <span className="w-1.5 h-1.5 rounded-full bg-[#2B8CE0] animate-pulse" />
+            <span className="text-[#2B8CE0]">NEWS TIME</span>
           </span>
         )}
 

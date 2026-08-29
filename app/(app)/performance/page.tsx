@@ -54,6 +54,80 @@ const MANUAL_CONDITIONS: { key: string; label: string }[] = [
   { key: 'doji_or_rejection', label: '1m doji or rejection candle' },
 ]
 
+// ══════════════════════════════════════════════════════════
+// MOCK DATA for the two new LLM sections below, shaped like what
+// the real "analysed_signals" and "news_signals" resolution tables
+// will contain. The success rate here is ALWAYS a real computed
+// count against real price data (same principle as the rest of this
+// page) -- never the LLM reporting its own accuracy. Swap for real
+// Supabase queries once those tables exist.
+// ══════════════════════════════════════════════════════════
+interface LlmResolvedSignal {
+  signal_id: string
+  model: string
+  outcome: 'successful' | 'unsuccessful'
+}
+
+const MOCK_LLM_ANALYSIS: LlmResolvedSignal[] = [
+  { signal_id: 'XAUUSD-3m-1756411800-precision-buy', model: 'Llama 4 Maverick', outcome: 'unsuccessful' },
+  { signal_id: 'XAUUSD-1m-1756410900-sniper_confirmation-sell', model: 'Llama 4 Maverick', outcome: 'successful' },
+]
+
+const MOCK_NEWS_ANALYSIS: LlmResolvedSignal[] = [
+  { signal_id: 'XAUUSD-1m-1756405200-sniper_confirmation-buy', model: 'Llama 4 Maverick', outcome: 'successful' },
+]
+
+function LlmSuccessSection({
+  title, subtitle, data, accentColor,
+}: {
+  title: string; subtitle: string; data: LlmResolvedSignal[]; accentColor: string
+}) {
+  const total = data.length
+  const successCount = data.filter(d => d.outcome === 'successful').length
+  const pct = total > 0 ? Math.round((successCount / total) * 100) : null
+
+  return (
+    <div className="bg-[#0B0F14] border border-[#1B232C] rounded-xl p-6 mt-5">
+      <div className="font-mono text-[11px] tracking-widest text-[#7C8896] uppercase mb-1">{title}</div>
+      <div className="font-mono text-[10px] text-[#7C8896] mb-4">{subtitle}</div>
+
+      {total === 0 ? (
+        <div className="text-[#7C8896] font-mono text-sm">No resolved signals yet for this section.</div>
+      ) : (
+        <div className="flex items-center gap-6 mb-5">
+          <div>
+            <div className="text-2xl font-bold" style={{ color: accentColor }}>{pct}%</div>
+            <div className="font-mono text-[10px] text-[#7C8896]">success rate</div>
+          </div>
+          <div className="flex gap-6 font-mono text-xs">
+            <div className="text-center"><div className="text-[#34D399] font-bold">{successCount}</div><div className="text-[9px] text-[#7C8896] uppercase mt-1">Successful</div></div>
+            <div className="text-center"><div className="text-[#F87171] font-bold">{total - successCount}</div><div className="text-[9px] text-[#7C8896] uppercase mt-1">Unsuccessful</div></div>
+            <div className="text-center"><div className="text-white font-bold">{total}</div><div className="text-[9px] text-[#7C8896] uppercase mt-1">Total resolved</div></div>
+          </div>
+        </div>
+      )}
+
+      <details className="bg-[#0F141A] border border-[#1B232C] rounded-lg">
+        <summary className="cursor-pointer px-4 py-3 font-mono text-[11px] text-[#2DD4BF] uppercase tracking-wide">
+          Show individual results ({total})
+        </summary>
+        <div className="px-4 pb-3 space-y-1.5">
+          {total === 0 ? (
+            <div className="font-mono text-[11px] text-[#7C8896] py-2">Nothing resolved yet.</div>
+          ) : data.map((d, i) => (
+            <div key={i} className="font-mono text-[11px] flex justify-between items-center py-1.5 border-t border-[#1B232C] first:border-t-0">
+              <span className="text-[#EDEFF2]">{d.signal_id}</span>
+              <span className={`px-2 py-0.5 rounded ${d.outcome === 'successful' ? 'text-[#2B8CE0] bg-[#2B8CE0]/15' : 'text-[#F87171] bg-[#F87171]/15'}`}>
+                {d.outcome.toUpperCase()}
+              </span>
+            </div>
+          ))}
+        </div>
+      </details>
+    </div>
+  )
+}
+
 export default function PerformancePage() {
   const [signals, setSignals] = useState<any[]>([])
 
@@ -281,6 +355,28 @@ export default function PerformancePage() {
           </div>
         )}
       </div>
+
+      {/* ══════════════════════════════════════════════════════════
+          NEW: LLM Analysis + News Analysed Signals success rates.
+          Both are ALWAYS computed from real price data against the
+          LLM's preferred entry/SL/TP -- the LLM never reports its
+          own accuracy. Mock data above; swap for real Supabase
+          queries once the analysed_signals/news_signals tables and
+          their 24h auto-resolution job exist.
+          ══════════════════════════════════════════════════════════ */}
+      <LlmSuccessSection
+        title="LLM Analysis — Analysed Signals Success Rate"
+        subtitle="Real win/loss on the LLM's preferred entry/SL/TP, for signals it marked invalid — resolved automatically every 24h against live price data, never self-reported."
+        data={MOCK_LLM_ANALYSIS}
+        accentColor="#2DD4BF"
+      />
+
+      <LlmSuccessSection
+        title="News Analysed Signals — Success Rate"
+        subtitle="Same principle, scoped to signals that fired during a news window and were given a preferred level by the news-analysis model."
+        data={MOCK_NEWS_ANALYSIS}
+        accentColor="#2B8CE0"
+      />
 
       {closed.length === 0 && (
         <div className="mt-5 text-[#7C8896] font-mono text-sm">No resolved signals yet — this fills in once the outcome-resolution job is running.</div>
