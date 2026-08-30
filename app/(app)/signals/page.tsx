@@ -170,9 +170,10 @@ export default function SignalsPage() {
                   </span>
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-[10px] text-[#7C8896]">{formatKenyaTime(sig.created_at)}</span>
-                    <span className={`font-mono text-[10px] px-2.5 py-1 rounded ${
+                    <span className={`font-mono text-[10px] px-2.5 py-1 rounded flex items-center gap-1.5 ${
                       !isClosed ? 'bg-[#14625A]/30 text-[#2DD4BF]' : isWin ? 'bg-[#2B8CE0]/15 text-[#2B8CE0]' : 'bg-[#F87171]/15 text-[#F87171]'
                     }`}>
+                      {!isClosed && <span className="w-1.5 h-1.5 rounded-full bg-[#2B8CE0] animate-pulse" title="Still open — rechecked automatically every 10 minutes" />}
                       {!isClosed ? 'OPEN' : (sig.final_outcome || 'CLOSED').replace(/_/g, ' ').toUpperCase()}
                     </span>
                   </div>
