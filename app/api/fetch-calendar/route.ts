@@ -50,15 +50,25 @@ export async function GET(req: Request) {
 
   const today = todayUTC()
 
-  // Idempotent guard -- this is the actual protection for the 1/day limit.
-  const { data: existing } = await supabase
-    .from('calendar_events')
-    .select('id')
-    .eq('fetched_for_date', today)
-    .limit(1)
+  // Idempotent guard, now checking whether TODAY was already
+  // ATTEMPTED (not just whether it succeeded) -- a real gap found
+  // live: a call that reaches JBlanked but extracts zero events still
+  // spends the day's one free request, and the original version of
+  // this check didn't account for that.
+  const { data: existingAttempt } = await supabase
+    .from('calendar_fetch_attempts')
+    .select('attempt_date, events_extracted')
+    .eq('attempt_date', today)
+    .maybeSingle()
 
-  if (existing && existing.length > 0) {
-    return Response.json({ skipped: true, reason: 'already_cached_today', date: today })
+  if (existingAttempt) {
+    return Response.json({
+      skipped: true,
+      reason: 'already_attempted_today',
+      date: today,
+      events_extracted_on_that_attempt: existingAttempt.events_extracted,
+      note: 'JBlanked\'s free tier is 1 request/day. Today\'s single attempt already happened -- try again after the daily reset, not before.',
+    })
   }
 
   try {
@@ -70,6 +80,12 @@ export async function GET(req: Request) {
       signal: AbortSignal.timeout(15000),
     })
     const data = await res.json()
+
+    // Record the attempt IMMEDIATELY, before parsing -- this is what
+    // actually protects the scarce 1/day quota, since the request has
+    // already been spent the moment this fetch call was made,
+    // regardless of what happens next.
+    await supabase.from('calendar_fetch_attempts').upsert({ attempt_date: today, events_extracted: 0 })
 
     if (!res.ok) {
       return Response.json({ error: `JBlanked HTTP ${res.status}`, detail: data })
@@ -90,6 +106,7 @@ export async function GET(req: Request) {
     if (rows.length > 0) {
       await supabase.from('calendar_events').insert(rows)
     }
+    await supabase.from('calendar_fetch_attempts').update({ events_extracted: rows.length }).eq('attempt_date', today)
 
     // DIAGNOSTIC: if nothing was extracted, show a sample of the raw
     // response so the field-name guesses in extractField() can be
@@ -100,7 +117,7 @@ export async function GET(req: Request) {
       return Response.json({
         fetched: 0,
         date: today,
-        diagnostic_note: 'Zero events extracted -- likely a field-name mismatch, not a real "no events today". Check raw_sample below against extractField()\'s candidate names.',
+        diagnostic_note: 'Zero events extracted -- likely a field-name mismatch, not a real "no events today". Check raw_sample below against extractField()\'s candidate names. This attempt is now recorded -- next try is tomorrow, not another call today.',
         raw_sample: Array.isArray(rawEvents) ? rawEvents.slice(0, 2) : rawEvents,
       })
     }
