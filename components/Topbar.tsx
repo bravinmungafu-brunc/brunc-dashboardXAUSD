@@ -3,14 +3,27 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 
-function getSession() {
+// STAGE: replaced the old getSession() (which always returned SOMETHING,
+// defaulting silently to 'ASIAN' for any hour not in London/NY) with
+// real, named hours for every session including Asian -- verified with
+// an actual hour-by-hour table before shipping this. London/NY hours
+// match exactly what's already used in Performance's session breakdown
+// and elsewhere, so this doesn't introduce a second, conflicting
+// definition -- it only adds the missing Asian session and makes "no
+// session active" a real, distinct state instead of a fallback guess.
+// This produces a genuine empty gap at 22:00-00:00 UTC.
+interface ActiveSession { name: string; hours: string }
+
+function getActiveSession(): ActiveSession | null {
   const h = new Date().getUTCHours()
+  const isAsian = h >= 0 && h < 9
   const isLondon = h >= 8 && h < 17
   const isNewYork = h >= 13 && h < 22
-  if (isLondon && isNewYork) return 'LONDON/NY OVERLAP'
-  if (isLondon) return 'LONDON'
-  if (isNewYork) return 'NEW YORK'
-  return 'ASIAN'
+  if (isLondon && isNewYork) return { name: 'LONDON/NY OVERLAP', hours: '13:00-17:00 UTC' }
+  if (isLondon) return { name: 'LONDON', hours: '08:00-17:00 UTC' }
+  if (isNewYork) return { name: 'NEW YORK', hours: '13:00-22:00 UTC' }
+  if (isAsian) return { name: 'ASIAN', hours: '00:00-09:00 UTC' }
+  return null // genuine gap (22:00-00:00 UTC) -- no session active
 }
 
 function getKenyaTime() {
@@ -40,7 +53,7 @@ function stalenessColor(ms: number | null): string {
 }
 
 export default function Topbar() {
-  const [session, setSession] = useState('—')
+  const [activeSession, setActiveSession] = useState<ActiveSession | null>(null)
   const [eatTime, setEatTime] = useState('—')
   const [lastSignalMs, setLastSignalMs] = useState<number | null>(null)
   const [lastSignalKnown, setLastSignalKnown] = useState(false)
@@ -49,7 +62,7 @@ export default function Topbar() {
   const router = useRouter()
 
   useEffect(() => {
-    setSession(getSession())
+    setActiveSession(getActiveSession())
     setEatTime(getKenyaTime())
 
     async function checkLastSignal() {
@@ -68,17 +81,22 @@ export default function Topbar() {
     }
     checkLastSignal()
 
-    // TODO: replace with a real check against the once-daily cached
-    // calendar table, same logic as Sidebar's checkNewsWindow -- pure
-    // local time comparison, no live API call needed per check.
+    // STAGE: real check now, was a stub. Same endpoint Sidebar uses.
     async function checkNewsWindow() {
-      setNewsWindowActive(false)
-      setNewsEventLabel('')
+      try {
+        const res = await fetch('/api/news-window-status')
+        const data = await res.json()
+        setNewsWindowActive(!!data.active)
+        setNewsEventLabel(data.event?.label ?? '')
+      } catch {
+        setNewsWindowActive(false)
+        setNewsEventLabel('')
+      }
     }
     checkNewsWindow()
 
     const interval = setInterval(() => {
-      setSession(getSession())
+      setActiveSession(getActiveSession())
       setEatTime(getKenyaTime())
       setLastSignalMs(prev => (prev == null ? null : prev + 30000))
       checkNewsWindow()
@@ -118,9 +136,20 @@ export default function Topbar() {
           </span>
         )}
 
-        <span className="ml-auto border border-[#1B232C] rounded px-2 md:px-2.5 py-1 text-[#2DD4BF] flex-shrink-0">
-          <span className="hidden md:inline">SESSION: </span>{session}
-        </span>
+        {/* STAGE: only renders when a real named session is active --
+            genuinely empty (nothing shown) during the 22:00-00:00 UTC
+            gap, instead of the old silent 'ASIAN' fallback. Shines
+            blue with the same pulsing treatment as the news indicator
+            whenever any session (Asian/London/NY/Overlap) is active,
+            to draw attention exactly as requested. */}
+        {activeSession && (
+          <span className="ml-auto flex items-center gap-1.5 flex-shrink-0 px-2 md:px-2.5 py-1 rounded border border-[#2B8CE0]/40 bg-[#2B8CE0]/10" title={activeSession.hours}>
+            <span className="w-1.5 h-1.5 rounded-full bg-[#2B8CE0] animate-pulse" />
+            <span className="hidden md:inline text-[#2B8CE0]">SESSION: </span>
+            <span className="text-[#2B8CE0]">{activeSession.name}</span>
+          </span>
+        )}
+
         <button onClick={handleLogout} className="md:hidden flex-shrink-0 text-[#7C8896]" aria-label="Sign out">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
             <path d="M6 2H3.5A1.5 1.5 0 002 3.5v9A1.5 1.5 0 003.5 14H6M10.5 11l3-3-3-3M13.5 8H6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>

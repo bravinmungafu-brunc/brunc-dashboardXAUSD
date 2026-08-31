@@ -68,14 +68,46 @@ interface LlmResolvedSignal {
   outcome: 'successful' | 'unsuccessful'
 }
 
-const MOCK_LLM_ANALYSIS: LlmResolvedSignal[] = [
-  { signal_id: 'XAUUSD-3m-1756411800-precision-buy', model: 'Llama 4 Maverick', outcome: 'unsuccessful' },
-  { signal_id: 'XAUUSD-1m-1756410900-sniper_confirmation-sell', model: 'Llama 4 Maverick', outcome: 'successful' },
-]
+// STAGE: real Supabase-backed hook, replacing the mock arrays. Reads
+// closed rows from either analysed_signals or news_signals (same
+// shape, different table) and maps to the same display format. Since
+// llm_sl always mirrors Pine's own SL (see analyse-signals-route.ts's
+// design note), success/failure here reflects the same real price
+// data as the original signal for 'valid' rows, and the LLM's own
+// distinct TP outcome for 'invalid' rows -- never self-reported.
+function useLlmResolvedSignals(table: 'analysed_signals' | 'news_signals') {
+  const [data, setData] = useState<LlmResolvedSignal[]>([])
 
-const MOCK_NEWS_ANALYSIS: LlmResolvedSignal[] = [
-  { signal_id: 'XAUUSD-1m-1756405200-sniper_confirmation-buy', model: 'Llama 4 Maverick', outcome: 'successful' },
-]
+  const load = useCallback(async () => {
+    const { data: rows } = await supabase
+      .from(table)
+      .select('signal_id, llm_model, final_outcome')
+      .eq('status', 'closed')
+      .not('final_outcome', 'is', null)
+      .order('resolved_at', { ascending: false })
+      .limit(100)
+
+    setData(
+      (rows ?? [])
+        .filter((r: any) => r.final_outcome === 'tp_hit' || r.final_outcome === 'stopped_out')
+        .map((r: any) => ({
+          signal_id: r.signal_id,
+          model: r.llm_model,
+          outcome: r.final_outcome === 'tp_hit' ? 'successful' as const : 'unsuccessful' as const,
+        }))
+    )
+  }, [table])
+
+  useEffect(() => {
+    load()
+    const channel = supabase.channel(`${table}-perf-live`)
+      .on('postgres_changes', { event: '*', schema: 'public', table }, load)
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [table, load])
+
+  return data
+}
 
 function LlmSuccessSection({
   title, subtitle, data, accentColor,
@@ -130,6 +162,8 @@ function LlmSuccessSection({
 
 export default function PerformancePage() {
   const [signals, setSignals] = useState<any[]>([])
+  const analysedSignalsResolved = useLlmResolvedSignals('analysed_signals')
+  const newsSignalsResolved = useLlmResolvedSignals('news_signals')
 
   const load = useCallback(async () => {
     const { data } = await supabase.from('signals').select('*').order('created_at', { ascending: true })
@@ -357,24 +391,24 @@ export default function PerformancePage() {
       </div>
 
       {/* ══════════════════════════════════════════════════════════
-          NEW: LLM Analysis + News Analysed Signals success rates.
-          Both are ALWAYS computed from real price data against the
-          LLM's preferred entry/SL/TP -- the LLM never reports its
-          own accuracy. Mock data above; swap for real Supabase
-          queries once the analysed_signals/news_signals tables and
-          their 24h auto-resolution job exist.
+          LLM Analysis + News Signals success rates. Both are ALWAYS
+          computed from real price data via the two resolvers
+          (check-analysed-signals, check-news-signals) -- the LLM
+          never reports its own accuracy. Now genuinely real, reading
+          the analysed_signals/news_signals tables via
+          useLlmResolvedSignals above.
           ══════════════════════════════════════════════════════════ */}
       <LlmSuccessSection
         title="LLM Analysis — Analysed Signals Success Rate"
-        subtitle="Real win/loss on the LLM's preferred entry/SL/TP, for signals it marked invalid — resolved automatically every 24h against live price data, never self-reported."
-        data={MOCK_LLM_ANALYSIS}
+        subtitle="Real win/loss on the LLM's preferred entry/SL/TP, for signals it marked invalid — resolved automatically every 10 minutes against live price data, never self-reported."
+        data={analysedSignalsResolved}
         accentColor="#2DD4BF"
       />
 
       <LlmSuccessSection
         title="News Analysed Signals — Success Rate"
         subtitle="Same principle, scoped to signals that fired during a news window and were given a preferred level by the news-analysis model."
-        data={MOCK_NEWS_ANALYSIS}
+        data={newsSignalsResolved}
         accentColor="#2B8CE0"
       />
 

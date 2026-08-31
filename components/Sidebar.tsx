@@ -17,6 +17,7 @@ const NAV = [
 ]
 
 const STALE_OPEN_HOURS = 48
+const NEWS_CHECK_INTERVAL_MS = 60000 // matches Topbar's polling cadence
 
 function NavIcon({ type, active }: { type: string; active: boolean }) {
   const color = active ? '#2DD4BF' : '#7C8896'
@@ -82,15 +83,20 @@ export default function Sidebar() {
     }
     checkStaleOpen()
 
-    // TODO: replace with a real check against the once-daily cached
-    // calendar table -- compare current UTC time against each cached
-    // event's window (e.g. +/- 15 min). No live API call needed here,
-    // this is a pure local time comparison against already-fetched data.
+    // STAGE: real check now, was a stub always returning false. Reads
+    // the same news-window-status endpoint the Topbar and News Signals
+    // page use -- pure Supabase read on the backend, cheap to poll.
     async function checkNewsWindow() {
-      setNewsWindowActive(false)
+      try {
+        const res = await fetch('/api/news-window-status')
+        const data = await res.json()
+        setNewsWindowActive(!!data.active)
+      } catch {
+        setNewsWindowActive(false)
+      }
     }
     checkNewsWindow()
-    const newsInterval = setInterval(checkNewsWindow, 60000)
+    const newsInterval = setInterval(checkNewsWindow, NEWS_CHECK_INTERVAL_MS)
 
     const channel = supabase.channel('sidebar-signal-watch')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'signals' }, () => {
