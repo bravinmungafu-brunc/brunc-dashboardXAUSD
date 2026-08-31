@@ -91,6 +91,20 @@ export async function GET(req: Request) {
       await supabase.from('calendar_events').insert(rows)
     }
 
+    // DIAGNOSTIC: if nothing was extracted, show a sample of the raw
+    // response so the field-name guesses in extractField() can be
+    // corrected from real data instead of guessed again. Safe to
+    // leave in permanently -- only adds output on the zero-events
+    // case, never affects normal operation once this is fixed.
+    if (rows.length === 0) {
+      return Response.json({
+        fetched: 0,
+        date: today,
+        diagnostic_note: 'Zero events extracted -- likely a field-name mismatch, not a real "no events today". Check raw_sample below against extractField()\'s candidate names.',
+        raw_sample: Array.isArray(rawEvents) ? rawEvents.slice(0, 2) : rawEvents,
+      })
+    }
+
     return Response.json({ fetched: rows.length, date: today })
   } catch (err: any) {
     return Response.json({ error: err?.message ?? String(err) })
