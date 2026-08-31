@@ -90,23 +90,80 @@ async function incrementTdUsage(by: number): Promise<void> {
 
 // Graceful degradation by design: returns null on ANY failure (missing
 // key, quota exhausted, network error, bad response) rather than
-// throwing. A missing live price should never block analysis --
-// it's enrichment, not a hard dependency.
-async function fetchLivePrice(): Promise<number | null> {
+// throwing. Enrichment, never a hard dependency.
+//
+// STAGE UPGRADE: was a single /price lookup. Replaced with ONE
+// /time_series request for the last 15 minutes of 1-minute bars --
+// same 1 credit cost, but this now derives BOTH the current price
+// AND a simple movement/volatility read from the same call, instead
+// of needing two separate requests for two separate pieces of context.
+interface PriceContext {
+  currentPrice: number
+  rangePts: number
+  netMovePts: number
+  netMoveDirection: 'up' | 'down' | 'flat'
+  chopinessNote: string
+}
+
+async function fetchPriceContext(): Promise<PriceContext | null> {
   if (!TD_KEY) return null
   try {
     const used = await getTdUsage()
     if (used >= TD_DAILY_LIMIT) return null
-    const res = await fetch(`https://api.twelvedata.com/price?symbol=XAU/USD&apikey=${TD_KEY}`, {
-      signal: AbortSignal.timeout(8000),
-    })
+    const url = `https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=1min&outputsize=15&apikey=${TD_KEY}`
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) })
     const data = await res.json()
     await incrementTdUsage(1)
-    const price = data?.price != null ? parseFloat(data.price) : null
-    return Number.isFinite(price) ? price : null
+    if (data?.status === 'error' || !Array.isArray(data?.values) || data.values.length === 0) return null
+
+    const bars = data.values
+      .map((v: any) => ({ time: v.datetime, high: parseFloat(v.high), low: parseFloat(v.low), close: parseFloat(v.close) }))
+      .sort((a: any, b: any) => new Date(a.time).getTime() - new Date(b.time).getTime())
+
+    const currentPrice = bars[bars.length - 1].close
+    const oldestClose = bars[0].close
+    const maxHigh = Math.max(...bars.map((b: any) => b.high))
+    const minLow = Math.min(...bars.map((b: any) => b.low))
+
+    const rangePts = Math.round((maxHigh - minLow) / 0.01)
+    const netMove = currentPrice - oldestClose
+    const netMovePts = Math.round(Math.abs(netMove) / 0.01)
+    const netMoveDirection: 'up' | 'down' | 'flat' = netMove > 0 ? 'up' : netMove < 0 ? 'down' : 'flat'
+
+    // Simple heuristic, not a rigorous volatility model: net move as a
+    // share of total range. Close to 1 = clean directional trend,
+    // close to 0 = choppy/ranging -- enough real signal to be useful
+    // without overclaiming precision it doesn't have.
+    const efficiency = rangePts > 0 ? netMovePts / rangePts : 0
+    const chopinessNote = efficiency > 0.7
+      ? 'a clean, directional trend'
+      : efficiency < 0.35
+        ? 'choppy/ranging conditions'
+        : 'moderately directional conditions'
+
+    return { currentPrice, rangePts, netMovePts, netMoveDirection, chopinessNote }
   } catch {
     return null
   }
+}
+
+// Reads from the once-daily cached calendar (see fetch-calendar route)
+// -- this is a pure local comparison against already-fetched data, not
+// a live API call, so it costs nothing here regardless of how often
+// analyse-signals itself runs.
+async function getUpcomingHighImpactEvent(hoursAhead: number = 2): Promise<string | null> {
+  const now = new Date()
+  const cutoff = new Date(now.getTime() + hoursAhead * 3600000)
+  const { data } = await supabase
+    .from('calendar_events')
+    .select('event_time, currency, event_name, impact')
+    .gte('event_time', now.toISOString())
+    .lte('event_time', cutoff.toISOString())
+    .order('event_time', { ascending: true })
+    .limit(1)
+  if (!data || data.length === 0) return null
+  const e = data[0] as any
+  return `${e.currency ?? ''} ${e.event_name ?? 'economic event'} (impact: ${e.impact ?? 'unknown'}) at ${e.event_time}`
 }
 
 async function getToggleEnabled(): Promise<boolean> {
@@ -119,17 +176,21 @@ async function getToggleEnabled(): Promise<boolean> {
   return data.value === true || data.value === 'true'
 }
 
-function buildPrompt(sig: any, livePrice: number | null): string {
+function buildPrompt(sig: any, priceCtx: PriceContext | null, upcomingEvent: string | null): string {
   const rrLevels = sig.signal_type === 'precision' ? PRECISION_RR_LEVELS : SNIPER_RR_LEVELS
 
   let movementNote = 'Live price unavailable for this check -- judge on the signal data alone.'
-  if (livePrice != null && sig.entry != null) {
+  if (priceCtx != null && sig.entry != null) {
     const isBuy = sig.direction === 'buy' || sig.direction === 'long'
-    const delta = livePrice - sig.entry
+    const delta = priceCtx.currentPrice - sig.entry
     const movedInFavor = isBuy ? delta > 0 : delta < 0
     const points = Math.abs(Math.round(delta / 0.01))
-    movementNote = `Live price right now: ${livePrice} (entry was ${sig.entry}). Price has moved ${points}pts ${movedInFavor ? 'IN FAVOR of' : 'AGAINST'} this ${sig.direction} since it fired -- this is real movement Pine's own snapshot at fire-time couldn't have known about, and is worth weighing in your verdict, especially if it's already moved meaningfully against the direction.`
+    movementNote = `Live price right now: ${priceCtx.currentPrice} (entry was ${sig.entry}). Price has moved ${points}pts ${movedInFavor ? 'IN FAVOR of' : 'AGAINST'} this ${sig.direction} since it fired -- real movement Pine's own snapshot couldn't have known about. Recent market conditions (last ~15min): ${priceCtx.chopinessNote}, net ${priceCtx.netMoveDirection} move of ${priceCtx.netMovePts}pts within a ${priceCtx.rangePts}pt range. Choppy conditions mean any given SL is more likely to get clipped by noise even if the overall direction is right.`
   }
+
+  const calendarNote = upcomingEvent
+    ? `IMPORTANT: a high-impact economic event is scheduled soon -- ${upcomingEvent}. Weight this heavily: a signal firing close to major news carries real added risk regardless of how strong its grade/confluence looks, since price can move violently and unpredictably around the release.`
+    : 'No high-impact economic event scheduled in the next 2 hours, per today\'s cached calendar.'
 
   return `You are reviewing a trading signal from BRUNC's own XAUUSD strategy. Judge whether THIS signal genuinely satisfies the strategy's own rules -- do not apply a different technical analysis framework.
 
@@ -144,7 +205,9 @@ Signal:
 
 ${movementNote}
 
-Judge validity based on: does the grade and HTF confluence genuinely support this signal type firing, AND does the live price movement above still support this direction? For Precision, does the manual filter show real strength (most conditions true), or is this thin?
+${calendarNote}
+
+Judge validity based on: does the grade and HTF confluence genuinely support this signal type firing, does the live price movement above still support this direction, and is there imminent news risk? For Precision, does the manual filter show real strength (most conditions true), or is this thin?
 
 IMPORTANT CONSTRAINT on any alternate level you suggest: you do NOT have access to raw structural price data (box highs/lows) beyond what's given above -- Pine's own chosen SL (${sig.exits?.sl}) is the only genuinely real structural reference available to you. If you judge this signal invalid, do NOT invent a different SL price. Instead, only suggest a DIFFERENT R:R ratio from this exact allowed list: [${rrLevels.join(', ')}] -- pick a smaller (more conservative) ratio if the signal looks weak, keeping Pine's own SL and entry unchanged.
 
@@ -229,8 +292,9 @@ export async function GET(req: Request) {
     }
 
     try {
-      const livePrice = await fetchLivePrice() // returns null on any failure -- never blocks analysis
-      const parsed = await callOpenRouter(buildPrompt(sig, livePrice))
+      const priceCtx = await fetchPriceContext() // returns null on any failure -- never blocks analysis
+      const upcomingEvent = await getUpcomingHighImpactEvent(2) // local comparison against cache, no API cost
+      const parsed = await callOpenRouter(buildPrompt(sig, priceCtx, upcomingEvent))
       creditsUsedThisRun++
 
       const verdict = parsed.verdict === 'invalid' ? 'invalid' : 'valid'
