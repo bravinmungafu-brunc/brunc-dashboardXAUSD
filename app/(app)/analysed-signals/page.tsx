@@ -1,28 +1,20 @@
 'use client'
-import { useEffect, useState } from 'react'
-
-// ══════════════════════════════════════════════════════════
-// MOCK DATA -- structured exactly like the real Supabase shape
-// this page will read once the backend/LLM route exists. Every
-// field here maps 1:1 to what the "analysed_signals" table (or
-// equivalent join) will actually contain. Swap the two useEffect
-// fetch stubs below for real Supabase calls when ready -- nothing
-// else in this file needs to change.
-// ══════════════════════════════════════════════════════════
+import { useEffect, useState, useCallback } from 'react'
+import { supabase } from '@/lib/supabaseClient'
 
 type Verdict = 'valid' | 'invalid'
 
 interface AnalysedSignal {
-  id: number
+  rowId: number
   signal_id: string
   symbol: string
   direction: 'buy' | 'sell'
   signal_type: 'sniper_confirmation' | 'precision'
   path: string | null
-  entry: number
-  sl: number
-  tp: number
-  rr: number
+  entry: number | null
+  sl: number | null
+  tp: number | null
+  rr: number | null
   created_at: string
   llm_model: string
   verdict: Verdict
@@ -34,40 +26,7 @@ interface AnalysedSignal {
   resolution: 'open' | 'successful' | 'unsuccessful'
 }
 
-const MOCK_SIGNALS: AnalysedSignal[] = [
-  {
-    id: 1, signal_id: 'XAUUSD-1m-1756412200-sniper_confirmation-sell', symbol: 'XAUUSD',
-    direction: 'sell', signal_type: 'sniper_confirmation', path: 'setup_a',
-    entry: 4582.290, sl: 4580.815, tp: 4577.865, rr: 3,
-    created_at: new Date(Date.now() - 22 * 60000).toISOString(),
-    llm_model: 'Llama 4 Maverick', verdict: 'valid',
-    llm_entry: null, llm_sl: null, llm_tp: null, llm_rr: null,
-    reasoning: 'CSOD+BOS confirmed with grade 5/7 HTF agreement and genuine 147.5pt structural SL -- consistent with the strategy\'s own confirmation rules.',
-    resolution: 'open',
-  },
-  {
-    id: 2, signal_id: 'XAUUSD-3m-1756411800-precision-buy', symbol: 'XAUUSD',
-    direction: 'buy', signal_type: 'precision', path: null,
-    entry: 4560.120, sl: 4555.940, tp: 4564.300, rr: 2,
-    created_at: new Date(Date.now() - 48 * 60000).toISOString(),
-    llm_model: 'Llama 4 Maverick', verdict: 'invalid',
-    llm_entry: 4560.120, llm_sl: 4558.610, llm_tp: 4566.135, llm_rr: 4,
-    reasoning: 'Manual filter shows only 3/5 conditions true (session and doji failing) -- weaker than typical for a Precision fire. A tighter SL at the nearer swing low with a further real structural target gives better R:R for the same setup.',
-    resolution: 'unsuccessful',
-  },
-  {
-    id: 3, signal_id: 'XAUUSD-1m-1756410900-sniper_confirmation-sell', symbol: 'XAUUSD',
-    direction: 'sell', signal_type: 'sniper_confirmation', path: 'setup_b',
-    entry: 4591.640, sl: 4601.640, tp: 4541.640, rr: 5,
-    created_at: new Date(Date.now() - 65 * 60000).toISOString(),
-    llm_model: 'Llama 4 Maverick', verdict: 'valid',
-    llm_entry: null, llm_sl: null, llm_tp: null, llm_rr: null,
-    reasoning: 'Realignment sequence intact -- displacement, pullback to midpoint, and fresh confirming CSOD all present as the strategy requires.',
-    resolution: 'successful',
-  },
-]
-
-const STORAGE_TOGGLE_KEY = 'brunc:analysedSignalsEnabled'
+const OPENROUTER_DAILY_LIMIT = 50 // keep in sync with analyse-signals-route.ts's DAILY_LIMIT
 
 function formatKenyaTime(iso: string) {
   try {
@@ -77,36 +36,132 @@ function formatKenyaTime(iso: string) {
   } catch { return '—' }
 }
 
+function todayUTC() {
+  return new Date().toISOString().slice(0, 10)
+}
+
 export default function AnalysedSignalsPage() {
   const [enabled, setEnabled] = useState(true)
   const [loaded, setLoaded] = useState(false)
+  const [toggling, setToggling] = useState(false)
   const [signals, setSignals] = useState<AnalysedSignal[]>([])
   const [resolutionFilter, setResolutionFilter] = useState<'all' | 'successful' | 'unsuccessful' | 'open'>('all')
+  const [quotaUsed, setQuotaUsed] = useState(0)
 
-  // Quota -- mock for now. Real version reads a Supabase counter table
-  // the same way av_usage already tracks Twelve Data, keyed to this
-  // page's dedicated OpenRouter account.
-  const [quotaUsed] = useState(14)
-  const quotaLimit = 50
-  const quotaRemaining = quotaLimit - quotaUsed
-  const quotaExhausted = quotaRemaining <= 0
-
-  useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_TOGGLE_KEY)
-    if (stored !== null) setEnabled(stored === 'true')
+  // Real server-side toggle -- was localStorage-only before, which
+  // only affected what one browser displayed rather than what the
+  // backend actually did. Now reads/writes the real app_settings row
+  // via the toggle-analysed-signals API route.
+  const loadToggleState = useCallback(async () => {
+    try {
+      const res = await fetch('/api/settings/toggle-analysed-signals')
+      const data = await res.json()
+      setEnabled(data.enabled !== false)
+    } catch {
+      setEnabled(true) // fail open to the default rather than block the page on a network hiccup
+    }
     setLoaded(true)
-    // TODO: replace with real Supabase fetch + Realtime subscription,
-    // same pattern as Signals/Performance pages.
-    setSignals(MOCK_SIGNALS)
   }, [])
 
-  function toggleEnabled() {
-    setEnabled(prev => {
-      const next = !prev
-      localStorage.setItem(STORAGE_TOGGLE_KEY, String(next))
-      return next
-    })
+  async function toggleEnabled() {
+    const next = !enabled
+    setToggling(true)
+    setEnabled(next) // optimistic
+    try {
+      const res = await fetch('/api/settings/toggle-analysed-signals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: next }),
+      })
+      const data = await res.json()
+      if (data.error) {
+        setEnabled(!next) // revert on failure
+      } else {
+        setEnabled(data.enabled)
+      }
+    } catch {
+      setEnabled(!next) // revert on network failure
+    }
+    setToggling(false)
   }
+
+  const loadQuota = useCallback(async () => {
+    const { data } = await supabase
+      .from('openrouter_usage')
+      .select('count')
+      .eq('usage_date', todayUTC())
+      .eq('key_name', 'analysed_signals')
+      .maybeSingle()
+    setQuotaUsed(data?.count ?? 0)
+  }, [])
+
+  const loadSignals = useCallback(async () => {
+    const { data: analysed } = await supabase
+      .from('analysed_signals')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(50)
+
+    if (!analysed || analysed.length === 0) {
+      setSignals([])
+      return
+    }
+
+    const signalIds = analysed.map((a: any) => a.signal_id)
+    const { data: originals } = await supabase
+      .from('signals')
+      .select('signal_id, symbol, direction, signal_type, path, entry, exits, risk, created_at')
+      .in('signal_id', signalIds)
+
+    const originalsById = new Map((originals ?? []).map((o: any) => [o.signal_id, o]))
+
+    const merged: AnalysedSignal[] = analysed.map((a: any) => {
+      const orig = originalsById.get(a.signal_id)
+      const resolution: AnalysedSignal['resolution'] =
+        a.status !== 'closed' ? 'open' : a.final_outcome === 'tp_hit' ? 'successful' : 'unsuccessful'
+
+      return {
+        rowId: a.id,
+        signal_id: a.signal_id,
+        symbol: orig?.symbol ?? 'XAUUSD',
+        direction: (a.direction ?? orig?.direction ?? 'buy') as 'buy' | 'sell',
+        signal_type: orig?.signal_type ?? 'sniper_confirmation',
+        path: orig?.path ?? null,
+        entry: orig?.entry ?? null,
+        sl: orig?.exits?.sl ?? null,
+        tp: orig?.exits?.tp ?? null,
+        rr: orig?.risk?.tp_rr ?? orig?.exits?.rr_selected ?? null,
+        created_at: a.created_at ?? orig?.created_at,
+        llm_model: a.llm_model,
+        verdict: a.verdict,
+        llm_entry: a.llm_entry,
+        llm_sl: a.llm_sl,
+        llm_tp: a.llm_tp,
+        llm_rr: a.llm_rr,
+        reasoning: a.reasoning ?? '',
+        resolution,
+      }
+    })
+
+    setSignals(merged)
+  }, [])
+
+  useEffect(() => {
+    loadToggleState()
+    loadQuota()
+    loadSignals()
+
+    const channel = supabase.channel('analysed-signals-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'analysed_signals' }, () => {
+        loadSignals()
+        loadQuota()
+      })
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [loadToggleState, loadQuota, loadSignals])
+
+  const quotaRemaining = OPENROUTER_DAILY_LIMIT - quotaUsed
+  const quotaExhausted = quotaRemaining <= 0
 
   const filtered = signals.filter(s => resolutionFilter === 'all' || s.resolution === resolutionFilter)
   const resolvedCount = signals.filter(s => s.resolution !== 'open').length
@@ -121,26 +176,25 @@ export default function AnalysedSignalsPage() {
         </div>
       </div>
 
-      {/* Status bar: quota + toggle */}
       <div className="bg-[#0B0F14] border border-[#1B232C] rounded-2xl p-4 mb-5 flex items-center justify-between flex-wrap gap-4">
         <div className="flex items-center gap-5 flex-wrap">
           <div>
             <div className="font-mono text-[9px] tracking-widest text-[#7C8896] uppercase">Analysis tokens today</div>
             <div className={`font-mono text-sm font-bold mt-0.5 ${quotaExhausted ? 'text-[#F87171]' : quotaRemaining <= 10 ? 'text-[#F5A623]' : 'text-[#2DD4BF]'}`}>
-              {quotaUsed}/{quotaLimit} used
+              {quotaUsed}/{OPENROUTER_DAILY_LIMIT} used
             </div>
           </div>
           <div className="w-px h-8 bg-[#1B232C]" />
           <div>
             <div className="font-mono text-[9px] tracking-widest text-[#7C8896] uppercase">Model</div>
-            <div className="font-mono text-sm text-white mt-0.5">Llama 4 Maverick</div>
+            <div className="font-mono text-sm text-white mt-0.5">Ling 3.0 Flash Fin</div>
           </div>
         </div>
         <button
           onClick={toggleEnabled}
-          disabled={!loaded}
+          disabled={!loaded || toggling}
           aria-pressed={enabled}
-          className="flex items-center gap-2.5"
+          className="flex items-center gap-2.5 disabled:opacity-50"
         >
           <span className="font-mono text-[10px] text-[#7C8896] uppercase tracking-wide">
             {enabled ? 'Analysis on' : 'Analysis off'}
@@ -162,7 +216,6 @@ export default function AnalysedSignalsPage() {
         </div>
       )}
 
-      {/* Filter pills */}
       <div className="flex gap-2 mb-6 flex-wrap">
         {(['all', 'open', 'successful', 'unsuccessful'] as const).map(f => (
           <button key={f} onClick={() => setResolutionFilter(f)}
@@ -174,15 +227,14 @@ export default function AnalysedSignalsPage() {
 
       {filtered.length === 0 ? (
         <div className="bg-[#0B0F14] border border-[#1B232C] border-dashed rounded-2xl p-10 text-center">
-          <div className="mono text-[11px] text-[#7C8896]">No analysed signals in this view yet.</div>
+          <div className="mono text-[11px] text-[#7C8896]">No analysed signals in this view yet — waiting on live signal feed.</div>
         </div>
       ) : (
         <div className="space-y-4 mb-8">
           {filtered.map(sig => {
             const isValid = sig.verdict === 'valid'
             return (
-              <div key={sig.id} className="bg-[#0B0F14] border border-[#1B232C] rounded-xl overflow-hidden">
-                {/* Original Pine signal row */}
+              <div key={sig.rowId} className="bg-[#0B0F14] border border-[#1B232C] rounded-xl overflow-hidden">
                 <div className="p-5 flex justify-between items-start flex-wrap gap-3 border-b border-[#1B232C]">
                   <div>
                     <span className="font-bold text-white text-base flex items-center gap-2 flex-wrap">
@@ -195,12 +247,11 @@ export default function AnalysedSignalsPage() {
                     <div className="font-mono text-[10px] text-[#7C8896] mt-1.5">{formatKenyaTime(sig.created_at)}</div>
                   </div>
                   <div className="font-mono text-xs text-[#7C8896] text-right">
-                    <div>Entry <span className="text-white">{sig.entry.toFixed(3)}</span></div>
-                    <div>SL <span className="text-[#F87171]">{sig.sl.toFixed(3)}</span> · TP <span className="text-[#34D399]">{sig.tp.toFixed(3)}</span> · R:R <span className="text-white">1:{sig.rr}</span></div>
+                    <div>Entry <span className="text-white">{sig.entry?.toFixed(3) ?? '—'}</span></div>
+                    <div>SL <span className="text-[#F87171]">{sig.sl?.toFixed(3) ?? '—'}</span> · TP <span className="text-[#34D399]">{sig.tp?.toFixed(3) ?? '—'}</span> · R:R <span className="text-white">{sig.rr != null ? '1:' + sig.rr : '—'}</span></div>
                   </div>
                 </div>
 
-                {/* LLM verdict panel */}
                 <div className="p-5 bg-[#0F141A]">
                   <div className="flex items-center justify-between mb-3">
                     <span className="font-mono text-[10px] tracking-widest text-[#7C8896] uppercase">{sig.llm_model} verdict</span>
@@ -232,24 +283,25 @@ export default function AnalysedSignalsPage() {
         </div>
       )}
 
-      {/* Resolved-signals dropdown, auto-populated every 24h -- never LLM self-graded */}
       <div className="pt-6 border-t border-[#1B232C]">
         <div className="mb-3">
           <div className="font-mono text-[10px] tracking-[0.3em] text-[#F5A623] uppercase mb-1">Deterministic, Not AI-Generated</div>
           <h2 className="text-lg font-bold text-white">
-            LLM-Preferred Levels — Resolved <span className="text-[#7C8896] font-normal text-sm ml-2">— checked against real price data every 24h</span>
+            LLM-Preferred Levels — Resolved <span className="text-[#7C8896] font-normal text-sm ml-2">— checked against real price data automatically</span>
           </h2>
         </div>
         <div className="font-mono text-[10px] text-[#7C8896] mb-4">
-          {resolvedCount} of {signals.length} analysed signals resolved so far — {successCount} successful. Whether an LLM's preferred level actually won or lost is always computed from real market data, the same way the original Pine signals are, never reported by the model itself.
+          {resolvedCount} of {signals.length} analysed signals resolved so far — {successCount} successful. Whether an LLM's preferred level actually won or lost is always computed from real market data, never reported by the model itself.
         </div>
         <details className="bg-[#0B0F14] border border-[#1B232C] rounded-xl">
           <summary className="cursor-pointer px-5 py-3.5 font-mono text-xs text-[#2DD4BF] uppercase tracking-wide">
             Show all resolved LLM-preferred levels ({resolvedCount})
           </summary>
           <div className="px-5 pb-4 space-y-1.5">
-            {signals.filter(s => s.resolution !== 'open').map(s => (
-              <div key={s.id} className="font-mono text-[11px] flex justify-between items-center py-1.5 border-t border-[#1B232C] first:border-t-0">
+            {signals.filter(s => s.resolution !== 'open').length === 0 ? (
+              <div className="font-mono text-[11px] text-[#7C8896] py-2">Nothing resolved yet.</div>
+            ) : signals.filter(s => s.resolution !== 'open').map(s => (
+              <div key={s.rowId} className="font-mono text-[11px] flex justify-between items-center py-1.5 border-t border-[#1B232C] first:border-t-0">
                 <span className="text-[#EDEFF2]">{s.signal_id}</span>
                 <span className={`px-2 py-0.5 rounded ${s.resolution === 'successful' ? 'text-[#2B8CE0] bg-[#2B8CE0]/15' : 'text-[#F87171] bg-[#F87171]/15'}`}>
                   {s.resolution.toUpperCase()}
