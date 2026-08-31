@@ -319,6 +319,7 @@ export async function GET(req: Request) {
         llm_rr: llmRr,
         reasoning: parsed.reasoning ?? '',
         status: 'open',
+        direction: sig.direction ?? null, // real column now, not guessed later -- see resolver bug note
       })
 
       analysedCount++
