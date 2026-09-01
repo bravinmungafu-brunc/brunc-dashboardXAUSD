@@ -1,6 +1,7 @@
 // app/(app)/backtest/page.tsx
 'use client'
 import { useState } from 'react'
+import { DEFAULT_PARAMS } from '@/lib/backtest/engine'
 
 // STAGE SYNC: ConfigOverrides rewritten to match the real, current
 // BacktestParams shape -- targetRR, useManualEntryFilter,
@@ -116,12 +117,24 @@ export default function BacktestPage() {
   function updateConfigOverride(id: number, key: keyof ConfigOverrides, value: any) {
     setExtraConfigs(prev => prev.map(c => c.id === id ? { ...c, overrides: { ...c.overrides, [key]: value } } : c))
   }
-  function toggleOverrideEnabled(id: number, key: keyof ConfigOverrides, enabled: boolean, defaultVal: number) {
+  function toggleOverrideEnabled(id: number, key: keyof ConfigOverrides) {
     setExtraConfigs(prev => prev.map(c => {
       if (c.id !== id) return c
       const next = { ...c.overrides }
-      if (enabled) next[key] = defaultVal
-      else delete next[key]
+      const isEnabled = key in c.overrides
+      if (!isEnabled) {
+        // STAGE FIX: real bug found from live output -- this used to
+        // fill a newly-checked box with the number input's STEP size
+        // (e.g. 0.5 for pullback min/max), not a sensible value. A
+        // step of 0.5 became an almost-impossible-to-satisfy 0.5-0.5%
+        // pullback window, which is exactly what silently zeroed out
+        // every non-Baseline result. Now pulls the REAL backend
+        // default straight from DEFAULT_PARAMS (imported directly
+        // from the engine, so this can't drift out of sync again).
+        next[key] = DEFAULT_PARAMS[key] as number
+      } else {
+        delete next[key]
+      }
       return { ...c, overrides: next }
     }))
   }
@@ -225,7 +238,7 @@ export default function BacktestPage() {
                 return (
                   <div key={field.key} className="flex items-center gap-2">
                     <input type="checkbox" checked={enabled}
-                      onChange={e => toggleOverrideEnabled(cfg.id, field.key, e.target.checked, field.step)} />
+                      onChange={() => toggleOverrideEnabled(cfg.id, field.key)} />
                     <span className="font-mono text-[11px] text-[#7C8896] flex-1">{field.label}</span>
                     <input type="number" step={field.step} disabled={!enabled}
                       value={enabled ? (cfg.overrides[field.key] as number) : ''}

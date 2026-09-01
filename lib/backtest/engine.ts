@@ -462,7 +462,17 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
     const sW = findAtOrBefore(chains['W'], t)
     const sM = findAtOrBefore(chains['M'], t)
     const s12M = findAtOrBefore(chains['12M'], t)
-    const s1 = findAtOrBefore(chains['1'], t)
+    // BUG FIX: chains['1'][i] corresponds EXACTLY to bars1m[i] --
+    // same array, same order, same timestamps, built by
+    // computeBoxChain(barsByTF['1']) 1:1. findAtOrBefore requires
+    // strictly-BEFORE, so searching it for the current bar's own
+    // timestamp can never return that bar's own event -- it
+    // systematically returns the PREVIOUS bar's state instead (the
+    // very first bar returns nothing at all). Confirmed by direct
+    // trace before fixing, not assumed. Indexing directly is both
+    // correct and cheaper than a binary search that was structurally
+    // guaranteed to miss.
+    const s1 = chains['1'][i]
     const s3 = findAtOrBefore(chains['3'], t)
     const s5 = findAtOrBefore(chains['5'], t)
     if (!s15 || !s60 || !s240 || !sD || !sW || !sM || !s12M || !s1) continue
