@@ -325,7 +325,29 @@ export async function GET(req: Request) {
       analysedCount++
       results.push({ signal_id: sig.signal_id, verdict })
     } catch (err: any) {
-      results.push({ signal_id: sig.signal_id, outcome: 'error', detail: err?.message ?? String(err) })
+      const msg = err?.message ?? String(err)
+      results.push({ signal_id: sig.signal_id, outcome: 'error', detail: msg })
+
+      // STAGE FIX: real bug found by tracing actual live behavior --
+      // this used to just log the failure and move to the next
+      // signal, meaning a genuine platform-level rate-limit response
+      // from OpenRouter was silently retried every single cron cycle
+      // (every 10 minutes, all day), each retry a REAL request against
+      // OpenRouter's server even though it always failed -- while the
+      // local `used` counter only ever increments on SUCCESS (line
+      // above this catch block), so the dashboard kept showing 0 used
+      // even as real attempts kept accumulating against OpenRouter's
+      // actual server-side limit. Now: if OpenRouter itself says we're
+      // rate-limited, mark today as exhausted immediately (so every
+      // later run today skips without attempting anything) and stop
+      // trying the rest of this run's batch too, instead of wasting
+      // more real requests on signals that would obviously fail the
+      // same way.
+      if (/rate limit/i.test(msg) || /free-models-per-day/i.test(msg)) {
+        await supabase.from('openrouter_usage').upsert({ usage_date: todayUTC(), key_name: KEY_NAME, count: DAILY_LIMIT })
+        results.push({ outcome: 'stopped_early', reason: 'OpenRouter reported a real rate-limit rejection -- marking today exhausted and halting further attempts in this run.' })
+        break
+      }
     }
   }
 
