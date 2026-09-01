@@ -48,6 +48,19 @@ function daysAgoISO(n: number) {
   return new Date(Date.now() - n * 86400000).toISOString().slice(0, 10)
 }
 
+// STAGE ADD: real sample-size awareness, not just a caveat I have to
+// remember to repeat -- Sniper and Precision have wildly different
+// natural firing rates (historically ~75/day vs ~0.35/day), so a
+// single global "small sample" threshold would either be too strict
+// for Sniper or too loose for Precision. Tiers below are a reasonable
+// statistical rule of thumb (variance of a win-rate estimate shrinks
+// substantially past ~30), not a precise cutoff.
+function sampleTier(n: number): { label: string; color: string } {
+  if (n < 10) return { label: `only ${n} -- do not trust this number`, color: '#F87171' }
+  if (n < 30) return { label: `only ${n} -- treat as a rough signal, not proof`, color: '#F5A623' }
+  return { label: `${n} -- reasonable sample`, color: '#34D399' }
+}
+
 const OVERRIDE_FIELDS: { key: keyof ConfigOverrides; label: string; step: number }[] = [
   { key: 'maxSLPoints', label: 'Max SL cap (points)', step: 10 },
   { key: 'slBufferPointsFlat', label: 'SL buffer (points)', step: 10 },
@@ -249,7 +262,7 @@ export default function BacktestPage() {
                 SL cap {r.params.maxSLPoints}pts · HTF mid-rej {r.params.htfMidRejMinCount}/6 · Setup A/B CSOD {r.params.execCsodDisplacementPct}% · pullback {r.params.pullbackDispMinPct}-{r.params.pullbackDispMaxPct}%
               </div>
 
-              <div className="flex items-center gap-6 mb-5 flex-wrap">
+              <div className="flex items-center gap-6 mb-2 flex-wrap">
                 <div>
                   <div className="text-2xl font-bold text-[#34D399]">{r.summary.winRate !== null ? r.summary.winRate + '%' : '—'}</div>
                   <div className="font-mono text-[10px] text-[#7C8896]">win rate</div>
@@ -273,24 +286,48 @@ export default function BacktestPage() {
                 </div>
               </div>
 
-              <div className="space-y-2 mb-4">
-                {Object.entries(r.summary.byType).map(([type, stats]) => (
-                  <div key={type} className="flex justify-between font-mono text-xs">
-                    <span className="text-[#7C8896]">{type.replace(/_/g, ' ')} <span className="text-[#3A434D]">· {stats.total}</span></span>
-                    <span className="text-white">{stats.winRate !== null ? stats.winRate + '%' : '—'}</span>
+              {(() => {
+                const overallN = r.summary.wins + r.summary.losses
+                const tier = sampleTier(overallN)
+                return (
+                  <div className="font-mono text-[10px] mb-5" style={{ color: tier.color }}>
+                    Sample size: {tier.label}
                   </div>
-                ))}
+                )
+              })()}
+
+              <div className="space-y-2 mb-4">
+                {Object.entries(r.summary.byType).map(([type, stats]) => {
+                  const n = stats.total
+                  const tier = sampleTier(n)
+                  return (
+                    <div key={type} className="font-mono text-xs">
+                      <div className="flex justify-between">
+                        <span className="text-[#7C8896]">{type.replace(/_/g, ' ')} <span className="text-[#3A434D]">· {stats.total}</span></span>
+                        <span className="text-white">{stats.winRate !== null ? stats.winRate + '%' : '—'}</span>
+                      </div>
+                      {n > 0 && <div className="text-[9px] mt-0.5" style={{ color: tier.color }}>n={n} -- {tier.label}</div>}
+                    </div>
+                  )
+                })}
               </div>
 
               {r.summary.byPath && (r.summary.byPath.setup_a?.total > 0 || r.summary.byPath.setup_b?.total > 0) && (
                 <div className="space-y-2 mb-4 pt-3 border-t border-[#1B232C]">
                   <div className="font-mono text-[9px] text-[#3A434D] uppercase mb-1">Sniper Confirmation, by path</div>
-                  {Object.entries(r.summary.byPath).map(([path, stats]: [string, any]) => (
-                    <div key={path} className="flex justify-between font-mono text-xs">
-                      <span className="text-[#7C8896]">{path === 'setup_a' ? 'Setup A (CSOD+BOS)' : 'Setup B (realignment)'} <span className="text-[#3A434D]">· {stats.total}</span></span>
-                      <span className="text-white">{stats.winRate !== null ? stats.winRate + '%' : '—'}</span>
-                    </div>
-                  ))}
+                  {Object.entries(r.summary.byPath).map(([path, stats]: [string, any]) => {
+                    const n = stats.total
+                    const tier = sampleTier(n)
+                    return (
+                      <div key={path} className="font-mono text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-[#7C8896]">{path === 'setup_a' ? 'Setup A (CSOD+BOS)' : 'Setup B (realignment)'} <span className="text-[#3A434D]">· {stats.total}</span></span>
+                          <span className="text-white">{stats.winRate !== null ? stats.winRate + '%' : '—'}</span>
+                        </div>
+                        {n > 0 && <div className="text-[9px] mt-0.5" style={{ color: tier.color }}>n={n} -- {tier.label}</div>}
+                      </div>
+                    )
+                  })}
                 </div>
               )}
 
