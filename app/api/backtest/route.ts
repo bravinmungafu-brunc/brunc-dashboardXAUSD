@@ -62,17 +62,13 @@ async function fetchSeriesPaginated(
   return { bars, creditsUsed }
 }
 
-async function fetchDxy(startDate: string, endDate: string): Promise<{ bars: Bar[]; creditsUsed: number }> {
-  const url = `https://api.twelvedata.com/time_series?symbol=DXY&interval=1h&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}&order=ASC&outputsize=5000&apikey=${TD_KEY}`
-  const res = await fetch(url)
-  const data = await res.json()
-  if (data?.status === 'error' || !Array.isArray(data?.values)) return { bars: [], creditsUsed: 1 }
-  const bars: Bar[] = data.values.map((v: any) => ({
-    time: v.datetime.replace(' ', 'T') + 'Z',
-    open: parseFloat(v.open), high: parseFloat(v.high), low: parseFloat(v.low), close: parseFloat(v.close),
-  })).sort((a: Bar, b: Bar) => a.time.localeCompare(b.time))
-  return { bars, creditsUsed: 1 }
-}
+// STAGE SYNC: fetchDxy() removed entirely. DXY no longer gates any
+// signal type as of BRUVV Stage 36 (confirmed by direct comparison
+// against a reference script -- Setup A, Setup B, and Precision all
+// dropped their DXY-agreement requirement). Fetching it here was
+// spending 1 real Twelve Data credit per backtest run on data the
+// engine never used for anything -- pure waste, removed at the
+// source rather than left as unused dead weight.
 
 function monthlyToYearly(monthly: Bar[]): Bar[] {
   const byYear = new Map<string, Bar[]>()
@@ -125,7 +121,9 @@ export async function POST(req: Request) {
   try {
     let creditsUsed = 0
 
-    const [oneMin, fiveMin, fifteenMin, sixtyMin, fourHour, daily, weekly, monthly, dxy] = await Promise.all([
+    // STAGE SYNC: dxy removed from this Promise.all -- 8 series now,
+    // not 9. One fewer credit spent per run than before, for free.
+    const [oneMin, fiveMin, fifteenMin, sixtyMin, fourHour, daily, weekly, monthly] = await Promise.all([
       fetchSeriesPaginated('1min', startDate, endDate),
       fetchSeriesPaginated('5min', startDate, endDate),
       fetchSeriesPaginated('15min', startDate, endDate),
@@ -134,10 +132,9 @@ export async function POST(req: Request) {
       fetchSeriesPaginated('1day', startDate, endDate),
       fetchSeriesPaginated('1week', startDate, endDate),
       fetchSeriesPaginated('1month', startDate, endDate),
-      fetchDxy(startDate, endDate),
     ])
 
-    creditsUsed = [oneMin, fiveMin, fifteenMin, sixtyMin, fourHour, daily, weekly, monthly, dxy]
+    creditsUsed = [oneMin, fiveMin, fifteenMin, sixtyMin, fourHour, daily, weekly, monthly]
       .reduce((sum, r) => sum + r.creditsUsed, 0)
 
     if (oneMin.bars.length === 0) {
@@ -155,7 +152,6 @@ export async function POST(req: Request) {
       'W': weekly.bars,
       'M': monthly.bars,
       '12M': monthlyToYearly(monthly.bars),
-      dxy60: dxy.bars,
     }
 
     await incrementUsage(creditsUsed)
@@ -172,7 +168,7 @@ export async function POST(req: Request) {
         barsCounts: {
           '1m': oneMin.bars.length, '5m': fiveMin.bars.length, '15m': fifteenMin.bars.length,
           '1h': sixtyMin.bars.length, '4h': fourHour.bars.length, 'D': daily.bars.length,
-          'W': weekly.bars.length, 'M': monthly.bars.length, 'dxy1h': dxy.bars.length,
+          'W': weekly.bars.length, 'M': monthly.bars.length,
         },
         creditsUsed,
         used: used + creditsUsed,

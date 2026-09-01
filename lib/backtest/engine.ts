@@ -1,42 +1,56 @@
 // lib/backtest/engine.ts
 //
-// A hand-ported TypeScript replica of BRUNC AI SNIPER SIGNALS (Stage 12
-// Pine script), built specifically so historical price data can be
-// walked through the same logic the live script uses, without needing
-// TradingView to execute it.
+// A hand-ported TypeScript replica of BRUVV AI SNIPER SIGNALS, built
+// specifically so historical price data can be walked through the
+// same logic the live script uses, without needing TradingView to
+// execute it.
+//
+// STAGE SYNC (this rewrite) -- the engine had genuinely drifted from
+// what's actually live in BRUVV, confirmed by direct comparison
+// against the real Pine source before touching anything here, not
+// assumed:
+//   1. SL sizing: was ATR-multiple based (atrSLMult/atrMinSLMult/
+//      atrBufferMult). BRUVV moved to a flat, broker-independent
+//      point system at Stage 26 (maxSLPoints/slBufferPointsFlat/
+//      minSLPoints), reverted to a 500pt hard cap at Stage 34/35.
+//      Replaced entirely -- ATR is no longer used for exits at all.
+//   2. TP sizing: was one fixed targetRR multiplier. BRUVV picks from
+//      a whole ladder of allowed ratios (sniperRRLevels/
+//      precisionRRLevels) based on the nearest real structural level
+//      beyond entry (Stage 18's f_pickNearestRR). Replaced entirely.
+//   3. Exit anchor: was two separate functions -- calcExitsHtfSourced
+//      (Setup A/Precision, anchored to whichever HTF box sourced the
+//      signal) and calcExitsMidpointSourced (Setup B, anchored to the
+//      HTF box midpoint). BRUVV unified these into ONE f_calcSL at
+//      Stage 26 -- ALWAYS anchored to the 15m box + protected swing,
+//      regardless of which HTF justified the signal or which setup
+//      fired. Replaced with one calcSL function, used identically by
+//      all three signal types, matching Pine exactly.
+//   4. Gating: Setup A, Setup B's realign stage, and Precision all
+//      required DXY agreement in the old engine. Direct comparison
+//      against a reference script at Stage 36 found this was an
+//      extra gate BRUVV's own design never called for -- removed from
+//      all three. Precision ALSO required a 5-part Manual Entry
+//      Filter in the old engine; Stage 36 found BRUVV's real
+//      Precision needs just 3 conditions (cycle + HTF mid-rejection +
+//      exec CSOD), not 5. Both extra gates removed here to match.
+//   5. Two defaults had silently drifted independent of the above:
+//      execCsodDisplacementPct (was 15.0, BRUVV's real value since
+//      Stage 20 is 8.0) and the London/NY session hours (were the
+//      old narrow 1-hour windows, BRUVV's real values since Stage 27
+//      are the wide session ranges) -- though since the Manual Entry
+//      Filter no longer gates anything, session hours no longer
+//      affect firing at all in the current script; kept in the
+//      interface only for potential future use, not consumed by any
+//      gating logic below.
 //
 // HONESTY NOTE: Pine cannot be run outside TradingView, so this is a
-// manual re-implementation, not the actual script. It's been written
-// to mirror the Pine source section-by-section (same names, same
-// order) specifically so it can be audited against it directly. Two
-// approximations are unavoidable given available historical data:
+// manual re-implementation, not the actual script. Two approximations
+// are unavoidable given available historical data:
 //   - Twelve Data has no native 3-minute interval -- 3m reuses 5-minute
-//     bars, matching the same convention already used in resolve-signals.
+//     bars, matching the same convention used elsewhere in this project.
 //   - No native yearly interval -- 12M boxes are built by grouping
 //     monthly bars into calendar years.
-// ATR is computed on 15m bars as a stand-in for "chart timeframe",
-// since a backtest has no single equivalent of the live chart TF Pine
-// normally reads ta.atr() from.
-//
-// REVISION NOTE 1: the first draft of this file computed Setup A's
-// anyExecSellBOS/anyExecBuyBOS as a bare "did a BOS happen on this bar"
-// check, skipping Pine's actual requirement that the exec timeframe
-// must first be ARMED by a qualifying CSOD before a BOS counts. Setup B
-// structurally needs the CSOD-only half of that same tracker
-// (anyExecBuyCSOD/anyExecSellCSOD to know when to realign), and porting
-// it properly for Setup B surfaced the gap in Setup A -- both are now
-// fixed using one correctly-shared tracker, matching f_execCsodBosTracker.
-//
-// REVISION NOTE 2 (matches Stage 12 Pine fix): both exit-calculation
-// functions had a real bug ported faithfully from the pre-fix Pine
-// logic -- Setup A's own firing condition requires price to have
-// ALREADY moved past the referenced box edge before it can qualify, so
-// using that edge as the SL reference put SL on the WRONG side of
-// entry for every Setup A signal (below entry on a sell, above entry
-// on a buy). Backtests run before this fix would have shown meaningless
-// results for every Setup A signal. Both functions now fall back to
-// the pure ATR-distance SL whenever the box-edge-derived value lands on
-// the wrong side, exactly mirroring the live Pine fix.
 //
 // Treat results as informative, not proven correct, until cross-checked
 // against real signals accumulating from the live script over time.
@@ -55,49 +69,29 @@ export interface BacktestParams {
   execCsodDisplacementPct: number
   pullbackDispMinPct: number
   pullbackDispMaxPct: number
-  atrLen: number
-  atrSLMult: number
-  atrMinSLMult: number
-  atrBufferMult: number
-  targetRR: number
+  maxSLPoints: number
+  slBufferPointsFlat: number
+  minSLPoints: number
+  sniperRRLevels: number[]
+  precisionRRLevels: number[]
   swingPivotLen: number
-  useDxyFilter: boolean
-  dxyEmaLen: number
-  useManualEntryFilter: boolean
-  orderBlockMinDispPct: number
-  orderBlockMaxAgeBars: number
-  dojiBodyMaxPct: number
-  rejectionWickMinPct: number
-  londonOpenStartHour: number
-  londonOpenEndHour: number
-  nyOpenStartHour: number
-  nyOpenEndHour: number
 }
 
 export const DEFAULT_PARAMS: BacktestParams = {
   htfMidRejMinCount: 2,
   confirmDisplacementPct: 15.0,
-  execCsodDisplacementPct: 15.0,
+  execCsodDisplacementPct: 8.0, // STAGE SYNC: was 15.0, BRUVV's real value since Stage 20
   pullbackDispMinPct: 62.5,
   pullbackDispMaxPct: 75.0,
-  atrLen: 14,
-  atrSLMult: 2.5,
-  atrMinSLMult: 0.5,
-  atrBufferMult: 0.3,
-  targetRR: 2.0,
+  maxSLPoints: 500,             // STAGE SYNC: hard cap, matches BRUVV Stage 34/35
+  slBufferPointsFlat: 150,
+  minSLPoints: 50,
+  sniperRRLevels: [3, 4, 5, 6, 7, 8, 9, 10],
+  precisionRRLevels: [2, 3, 4],
   swingPivotLen: 3,
-  useDxyFilter: true,
-  dxyEmaLen: 50,
-  useManualEntryFilter: true,
-  orderBlockMinDispPct: 20.0,
-  orderBlockMaxAgeBars: 96,
-  dojiBodyMaxPct: 35.0,
-  rejectionWickMinPct: 50.0,
-  londonOpenStartHour: 8,
-  londonOpenEndHour: 9,
-  nyOpenStartHour: 13,
-  nyOpenEndHour: 14,
 }
+
+const POINT_VALUE = 0.01 // flat, matches BRUVV Stage 35's reverted pointValue
 
 export type Timeframe = '1' | '3' | '5' | '15' | '60' | '240' | 'D' | 'W' | 'M' | '12M'
 
@@ -111,8 +105,8 @@ export interface SimulatedSignal {
   entry: number
   sl: number
   tp: number
+  rrUsed: number
   gradeValue: number
-  manualFilterPassed: boolean | null
   outcome: 'tp_hit' | 'stopped_out' | 'still_open'
   resolvedAt: string | null
   barsToResolve: number | null
@@ -199,34 +193,6 @@ export function findAtOrBefore<T extends { time: string }>(events: T[], time: st
   return result
 }
 
-export function computeATR(bars: Bar[], length: number): { time: string; value: number }[] {
-  const out: { time: string; value: number }[] = []
-  let prevClose: number | null = null
-  let rma: number | null = null
-
-  for (const bar of bars) {
-    const tr = prevClose == null
-      ? bar.high - bar.low
-      : Math.max(bar.high - bar.low, Math.abs(bar.high - prevClose), Math.abs(bar.low - prevClose))
-
-    rma = rma == null ? tr : (rma * (length - 1) + tr) / length
-    out.push({ time: bar.time, value: rma })
-    prevClose = bar.close
-  }
-  return out
-}
-
-export function computeEMA(bars: Bar[], length: number): { time: string; value: number }[] {
-  const out: { time: string; value: number }[] = []
-  const k = 2 / (length + 1)
-  let ema: number | null = null
-  for (const bar of bars) {
-    ema = ema == null ? bar.close : bar.close * k + ema * (1 - k)
-    out.push({ time: bar.time, value: ema })
-  }
-  return out
-}
-
 export function computeProtectedSwing(bars: Bar[], len: number): { time: string; protHigh: number | null; protLow: number | null }[] {
   const out: { time: string; protHigh: number | null; protLow: number | null }[] = []
   let protHigh: number | null = null
@@ -252,98 +218,6 @@ export function computeProtectedSwing(bars: Bar[], len: number): { time: string;
   return out
 }
 
-interface OBState {
-  time: string
-  obBuyLow: number | null
-  obBuyHigh: number | null
-  obBuyImpulseHigh: number | null
-  obSellLow: number | null
-  obSellHigh: number | null
-  obSellImpulseLow: number | null
-}
-
-export function computeOrderBlocks(
-  bars15m: Bar[],
-  boxChain15m: BoxEvent[],
-  params: BacktestParams
-): OBState[] {
-  const out: OBState[] = []
-  let lastDownH: number | null = null, lastDownL: number | null = null
-  let lastUpH: number | null = null, lastUpL: number | null = null
-  let obBuyLow: number | null = null, obBuyHigh: number | null = null, obBuyImpulseHigh: number | null = null
-  let obSellLow: number | null = null, obSellHigh: number | null = null, obSellImpulseLow: number | null = null
-  let obBuyAge = 0, obSellAge = 0
-
-  for (let i = 0; i < bars15m.length; i++) {
-    const bar = bars15m[i]
-    const box = boxChain15m[i]
-    const boxRange = box.refHigh - box.refLow
-
-    if (obBuyLow != null && bar.close < obBuyLow) { obBuyLow = null; obBuyHigh = null; obBuyImpulseHigh = null }
-    if (obSellHigh != null && bar.close > obSellHigh) { obSellLow = null; obSellHigh = null; obSellImpulseLow = null }
-
-    if (obBuyLow != null) {
-      obBuyAge++
-      if (obBuyAge > params.orderBlockMaxAgeBars) { obBuyLow = null; obBuyHigh = null; obBuyImpulseHigh = null }
-    }
-    if (obSellLow != null) {
-      obSellAge++
-      if (obSellAge > params.orderBlockMaxAgeBars) { obSellLow = null; obSellHigh = null; obSellImpulseLow = null }
-    }
-
-    if (obBuyLow != null) obBuyImpulseHigh = obBuyImpulseHigh == null ? bar.high : Math.max(obBuyImpulseHigh, bar.high)
-    if (obSellLow != null) obSellImpulseLow = obSellImpulseLow == null ? bar.low : Math.min(obSellImpulseLow, bar.low)
-
-    if (bar.close < bar.open) { lastDownH = bar.high; lastDownL = bar.low }
-    if (bar.close > bar.open) { lastUpH = bar.high; lastUpL = bar.low }
-
-    const minDisp = boxRange > 0 ? boxRange * params.orderBlockMinDispPct / 100 : 0
-    const qualifies = (box.csod || box.bos) && box.breakoutDist != null && box.breakoutDist >= minDisp
-
-    if (qualifies && box.state === 1 && lastDownH != null) {
-      obBuyLow = lastDownL; obBuyHigh = lastDownH; obBuyImpulseHigh = bar.high; obBuyAge = 0
-    }
-    if (qualifies && box.state === -1 && lastUpH != null) {
-      obSellLow = lastUpL; obSellHigh = lastUpH; obSellImpulseLow = bar.low; obSellAge = 0
-    }
-
-    out.push({ time: bar.time, obBuyLow, obBuyHigh, obBuyImpulseHigh, obSellLow, obSellHigh, obSellImpulseLow })
-  }
-  return out
-}
-
-function isDoji(bar: Bar, maxBodyPct: number): boolean {
-  const range = bar.high - bar.low
-  const body = Math.abs(bar.close - bar.open)
-  return range > 0 && body <= range * maxBodyPct / 100
-}
-function isRejectionBuy(bar: Bar, minWickPct: number): boolean {
-  const range = bar.high - bar.low
-  const lowerWick = Math.min(bar.open, bar.close) - bar.low
-  return range > 0 && lowerWick >= range * minWickPct / 100
-}
-function isRejectionSell(bar: Bar, minWickPct: number): boolean {
-  const range = bar.high - bar.low
-  const upperWick = bar.high - Math.max(bar.open, bar.close)
-  return range > 0 && upperWick >= range * minWickPct / 100
-}
-function scanRecentBuy(bars1m: Bar[], idx: number, params: BacktestParams): boolean {
-  for (let k = 1; k <= 5; k++) {
-    const b = bars1m[idx - k]
-    if (!b) continue
-    if (isDoji(b, params.dojiBodyMaxPct) || isRejectionBuy(b, params.rejectionWickMinPct)) return true
-  }
-  return false
-}
-function scanRecentSell(bars1m: Bar[], idx: number, params: BacktestParams): boolean {
-  for (let k = 1; k <= 5; k++) {
-    const b = bars1m[idx - k]
-    if (!b) continue
-    if (isDoji(b, params.dojiBodyMaxPct) || isRejectionSell(b, params.rejectionWickMinPct)) return true
-  }
-  return false
-}
-
 export function walkForOutcome(
   bars1m: Bar[],
   fromIdx: number,
@@ -361,49 +235,77 @@ export function walkForOutcome(
   return { outcome: 'still_open', resolvedAt: null, barsToResolve: null }
 }
 
-function calcExitsHtfSourced(
-  direction: 'buy' | 'sell', price: number, srcHigh: number, srcLow: number,
-  protSwing: { protHigh: number | null; protLow: number | null } | null,
-  atr: number, params: BacktestParams
-): { sl: number; tp: number } {
-  const maxSLDistance = atr * params.atrSLMult
-  const slBufferUnits = atr * params.atrBufferMult
-  const boxEdge = direction === 'sell' ? srcHigh : srcLow
-  const swingRef = direction === 'sell' ? protSwing?.protHigh ?? null : protSwing?.protLow ?? null
+// STAGE SYNC: replaces BOTH calcExitsHtfSourced and calcExitsMidpointSourced.
+// BRUVV's Stage 26 unification: SL is ALWAYS anchored to the 15m box +
+// protected swing, regardless of which HTF sourced the signal or
+// which setup fired -- matches f_calcSL exactly.
+function calcSL(
+  direction: 'buy' | 'sell', entryPrice: number,
+  h15: number, l15: number,
+  protSwingHigh: number | null, protSwingLow: number | null,
+  params: BacktestParams
+): number {
+  const price = entryPrice
+  const maxSLDistance = params.maxSLPoints * POINT_VALUE
+  const slBufferUnits = params.slBufferPointsFlat * POINT_VALUE
+
+  const boxEdge = direction === 'sell' ? h15 : l15
+  const swingRef = direction === 'sell' ? protSwingHigh : protSwingLow
 
   const rawSL = direction === 'sell'
     ? (swingRef != null && swingRef < boxEdge && swingRef > price ? swingRef : boxEdge)
     : (swingRef != null && swingRef > boxEdge && swingRef < price ? swingRef : boxEdge)
 
   const bufferedSL = direction === 'sell' ? rawSL + slBufferUnits : rawSL - slBufferUnits
-
   const slOnCorrectSide = direction === 'sell' ? bufferedSL > price : bufferedSL < price
-  const sl = direction === 'sell'
+
+  return direction === 'sell'
     ? (slOnCorrectSide ? Math.min(bufferedSL, price + maxSLDistance) : price + maxSLDistance)
     : (slOnCorrectSide ? Math.max(bufferedSL, price - maxSLDistance) : price - maxSLDistance)
-
-  const riskDist = Math.abs(price - sl)
-  const tp = direction === 'sell' ? price - riskDist * params.targetRR : price + riskDist * params.targetRR
-  return { sl, tp }
 }
 
-function calcExitsMidpointSourced(
-  direction: 'buy' | 'sell', price: number, srcHigh: number, srcLow: number,
-  atr: number, params: BacktestParams
-): { sl: number; tp: number } {
-  const maxSLDistance = atr * params.atrSLMult
-  const slBufferUnits = atr * params.atrBufferMult
-  const midpoint = (srcHigh + srcLow) / 2
-  const rawSL = direction === 'buy' ? midpoint - slBufferUnits : midpoint + slBufferUnits
+// STAGE SYNC: new -- matches f_pickNearestRR exactly. Looks at every
+// real structural level (HTF box edges + protected swing) that sits
+// beyond entry in the trade's favor, finds the nearest one, converts
+// to an R:R given this signal's actual SL distance, and snaps to
+// whichever ALLOWED ratio in rrLevels is closest -- never an
+// arbitrary pick. Falls back to the minimum ratio if nothing valid.
+function pickNearestRR(
+  direction: 'buy' | 'sell', entryPrice: number, sl: number,
+  candidates: (number | null)[], rrLevels: number[]
+): number {
+  const riskDist = Math.abs(entryPrice - sl)
+  let bestDist: number | null = null
 
-  const slOnCorrectSide = direction === 'buy' ? rawSL < price : rawSL > price
-  const sl = direction === 'buy'
-    ? (slOnCorrectSide ? Math.max(rawSL, price - maxSLDistance) : price - maxSLDistance)
-    : (slOnCorrectSide ? Math.min(rawSL, price + maxSLDistance) : price + maxSLDistance)
+  if (riskDist > 0) {
+    for (const lvl of candidates) {
+      if (lvl == null) continue
+      const dist = direction === 'sell' ? entryPrice - lvl : lvl - entryPrice
+      if (dist > riskDist) {
+        if (bestDist == null || dist < bestDist) bestDist = dist
+      }
+    }
+  }
 
-  const riskDist = Math.abs(price - sl)
-  const tp = direction === 'buy' ? price + riskDist * params.targetRR : price - riskDist * params.targetRR
-  return { sl, tp }
+  const minRR = rrLevels[0]
+  if (bestDist == null || riskDist <= 0) return minRR
+
+  const targetRRRaw = bestDist / riskDist
+  let closest = minRR
+  let bestGap: number | null = null
+  for (const rr of rrLevels) {
+    const gap = Math.abs(rr - targetRRRaw)
+    if (bestGap == null || gap < bestGap) {
+      bestGap = gap
+      closest = rr
+    }
+  }
+  return closest
+}
+
+function buildSingleTP(direction: 'buy' | 'sell', entryPrice: number, sl: number, rr: number): number {
+  const riskDist = Math.abs(entryPrice - sl)
+  return direction === 'sell' ? entryPrice - riskDist * rr : entryPrice + riskDist * rr
 }
 
 interface ExecTracker { armed: boolean; bosSeen: boolean }
@@ -421,14 +323,17 @@ interface SetupBTracker {
   usedThisLeg: boolean
 }
 
+// STAGE SYNC: removed the DXY parameters and dxyOK check from the
+// realign stage -- Stage 36 found BRUVV's real Setup B only requires
+// realignCSOD and cycleOK at this stage, not a third DXY-agreement
+// condition.
 function updateSetupBTracker(
   trk: SetupBTracker,
   st: number, refHigh: number, refLow: number,
   csodX: boolean, bosX: boolean, breakoutDist: number | null, boxRange: number,
   livePrice: number, params: BacktestParams,
   anyExecBuyCSOD: boolean, anyExecSellCSOD: boolean,
-  buyFadeCycleOK: boolean, sellFadeCycleOK: boolean,
-  dxyConfirmsBuy: boolean, dxyConfirmsSell: boolean
+  buyFadeCycleOK: boolean, sellFadeCycleOK: boolean
 ): boolean {
   let fired = false
 
@@ -472,8 +377,7 @@ function updateSetupBTracker(
   if (trk.waitingRealign && trk.armedDir !== 0) {
     const realignCSOD = trk.armedDir === 1 ? anyExecBuyCSOD : anyExecSellCSOD
     const cycleOK = trk.armedDir === 1 ? buyFadeCycleOK : trk.armedDir === -1 ? sellFadeCycleOK : true
-    const dxyOK = trk.armedDir === 1 ? dxyConfirmsBuy : trk.armedDir === -1 ? dxyConfirmsSell : true
-    if (realignCSOD && cycleOK && dxyOK) {
+    if (realignCSOD && cycleOK) {
       fired = true
       trk.waitingRealign = false
     }
@@ -504,7 +408,6 @@ export interface BarsByTF {
   'W': Bar[]
   'M': Bar[]
   '12M': Bar[]
-  dxy60: Bar[]
 }
 
 export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): SimulatedSignal[] {
@@ -521,10 +424,7 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
     '12M': computeBoxChain(barsByTF['12M']),
   }
 
-  const atr15 = computeATR(barsByTF['15'], params.atrLen)
-  const dxyEma = computeEMA(barsByTF.dxy60, params.dxyEmaLen)
   const protSwing5 = computeProtectedSwing(barsByTF['5'], params.swingPivotLen)
-  const orderBlocks = computeOrderBlocks(barsByTF['15'], chains['15'], params)
 
   const signals: SimulatedSignal[] = []
   const bars1m = barsByTF['1']
@@ -549,6 +449,8 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
     buy1: { armed: false, bosSeen: false }, buy3: { armed: false, bosSeen: false }, buy5: { armed: false, bosSeen: false },
   }
 
+  const minSLDistance = params.minSLPoints * POINT_VALUE
+
   for (let i = 0; i < bars1m.length; i++) {
     const bar1m = bars1m[i]
     const t = bar1m.time
@@ -565,18 +467,7 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
     const s5 = findAtOrBefore(chains['5'], t)
     if (!s15 || !s60 || !s240 || !sD || !sW || !sM || !s12M || !s1) continue
 
-    const atrEv = findAtOrBefore(atr15, t)
-    const atrValue = atrEv?.value ?? 0
-    if (atrValue <= 0) continue
-    const minSLDistance = atrValue * params.atrMinSLMult
-
-    const dxyC = findAtOrBefore(barsByTF.dxy60, t)
-    const dxyEmaEv = findAtOrBefore(dxyEma, t)
-    let dxyConfirmsBuy = true, dxyConfirmsSell = true
-    if (params.useDxyFilter && dxyC && dxyEmaEv) {
-      dxyConfirmsBuy = dxyC.close < dxyEmaEv.value
-      dxyConfirmsSell = dxyC.close > dxyEmaEv.value
-    }
+    const protSwing = findAtOrBefore(protSwing5, t)
 
     const rejTiers = [s60, s240, sD, sW, sM, s12M]
     const midRejSellCount = rejTiers.filter(ev => ev.rejHighCount >= 2).length
@@ -585,15 +476,6 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
     const anyHtfMidRejBuy = midRejBuyCount >= params.htfMidRejMinCount
 
     const cycleDir = precisionCycleDirAt(chains['15'], barsByTF['15'], t)
-
-    const protSwing = findAtOrBefore(protSwing5, t)
-    const ob = findAtOrBefore(orderBlocks, t)
-
-    const inLondonOrNYOpen = (() => {
-      const h = new Date(t).getUTCHours()
-      return (h >= params.londonOpenStartHour && h < params.londonOpenEndHour) ||
-             (h >= params.nyOpenStartHour && h < params.nyOpenEndHour)
-    })()
 
     const sellFadeCycleOK = s240.state === 0 || s240.state === -1 || (s240.state === 1 && s240.rejLowCount > 0)
     const buyFadeCycleOK = s240.state === 0 || s240.state === 1 || (s240.state === -1 && s240.rejHighCount > 0)
@@ -632,51 +514,38 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
       || (s3 && s3.csod && s3.state === -1 && (s3.breakoutDist ?? 0) >= minPrecDisp(s3))
       || (s5 && s5.csod && s5.state === -1 && (s5.breakoutDist ?? 0) >= minPrecDisp(s5))
 
-    if (cycleDir === 1 && anyHtfMidRejBuy && dxyConfirmsBuy && precisionBuyCsod) {
-      let manualOK: boolean | null = null
-      if (params.useManualEntryFilter) {
-        const biasOK = s60.state === 1
-        const zoneOK = ob != null && ob.obBuyLow != null && ob.obBuyHigh != null && bar1m.low <= ob.obBuyHigh && bar1m.high >= ob.obBuyLow
-        const fibOK = ob != null && ob.obBuyImpulseHigh != null && ob.obBuyLow != null && ob.obBuyImpulseHigh > ob.obBuyLow &&
-          bar1m.close < (ob.obBuyImpulseHigh + ob.obBuyLow) / 2
-        const dojiOK = scanRecentBuy(bars1m, i, params)
-        manualOK = biasOK && inLondonOrNYOpen && zoneOK && fibOK && dojiOK
-      }
-      if (!params.useManualEntryFilter || manualOK) {
-        const { sl, tp } = calcExitsHtfSourced('buy', bar1m.close, s15.refHigh, s15.refLow, protSwing, atrValue, params)
-        if (Math.abs(bar1m.close - sl) >= minSLDistance) {
-          const { outcome, resolvedAt, barsToResolve } = walkForOutcome(bars1m, i, 'buy', sl, tp)
-          signals.push({
-            time: t, signalType: 'precision', path: '', direction: 'buy',
-            execTf: '1', htfRung: precisionHtfRung(rejTiers, false),
-            entry: bar1m.close, sl, tp, gradeValue: grade(1, i),
-            manualFilterPassed: manualOK, outcome, resolvedAt, barsToResolve,
-          })
-        }
+    // STAGE SYNC: Precision -- 3 conditions only (cycle + HTF mid-rejection
+    // + exec CSOD), matching BRUVV's real Stage 36 logic. DXY and the
+    // 5-part Manual Entry Filter no longer gate this at all.
+    if (cycleDir === 1 && anyHtfMidRejBuy && precisionBuyCsod) {
+      const sl = calcSL('buy', bar1m.close, s15.refHigh, s15.refLow, protSwing?.protHigh ?? null, protSwing?.protLow ?? null, params)
+      if (Math.abs(bar1m.close - sl) >= minSLDistance) {
+        const candidates = [s60.refHigh, s60.refLow, s240.refHigh, s240.refLow, sD.refHigh, sD.refLow, sW.refHigh, sW.refLow, sM.refHigh, sM.refLow, s12M.refHigh, s12M.refLow, protSwing?.protHigh ?? null, protSwing?.protLow ?? null]
+        const rrUsed = pickNearestRR('buy', bar1m.close, sl, candidates, params.precisionRRLevels)
+        const tp = buildSingleTP('buy', bar1m.close, sl, rrUsed)
+        const { outcome, resolvedAt, barsToResolve } = walkForOutcome(bars1m, i, 'buy', sl, tp)
+        signals.push({
+          time: t, signalType: 'precision', path: '', direction: 'buy',
+          execTf: '1', htfRung: precisionHtfRung(rejTiers, false),
+          entry: bar1m.close, sl, tp, rrUsed, gradeValue: grade(1, i),
+          outcome, resolvedAt, barsToResolve,
+        })
       }
     }
 
-    if (cycleDir === -1 && anyHtfMidRejSell && dxyConfirmsSell && precisionSellCsod) {
-      let manualOK: boolean | null = null
-      if (params.useManualEntryFilter) {
-        const biasOK = s60.state === -1
-        const zoneOK = ob != null && ob.obSellLow != null && ob.obSellHigh != null && bar1m.low <= ob.obSellHigh && bar1m.high >= ob.obSellLow
-        const fibOK = ob != null && ob.obSellHigh != null && ob.obSellImpulseLow != null && ob.obSellHigh > ob.obSellImpulseLow &&
-          bar1m.close > (ob.obSellHigh + ob.obSellImpulseLow) / 2
-        const dojiOK = scanRecentSell(bars1m, i, params)
-        manualOK = biasOK && inLondonOrNYOpen && zoneOK && fibOK && dojiOK
-      }
-      if (!params.useManualEntryFilter || manualOK) {
-        const { sl, tp } = calcExitsHtfSourced('sell', bar1m.close, s15.refHigh, s15.refLow, protSwing, atrValue, params)
-        if (Math.abs(bar1m.close - sl) >= minSLDistance) {
-          const { outcome, resolvedAt, barsToResolve } = walkForOutcome(bars1m, i, 'sell', sl, tp)
-          signals.push({
-            time: t, signalType: 'precision', path: '', direction: 'sell',
-            execTf: '1', htfRung: precisionHtfRung(rejTiers, true),
-            entry: bar1m.close, sl, tp, gradeValue: grade(-1, i),
-            manualFilterPassed: manualOK, outcome, resolvedAt, barsToResolve,
-          })
-        }
+    if (cycleDir === -1 && anyHtfMidRejSell && precisionSellCsod) {
+      const sl = calcSL('sell', bar1m.close, s15.refHigh, s15.refLow, protSwing?.protHigh ?? null, protSwing?.protLow ?? null, params)
+      if (Math.abs(bar1m.close - sl) >= minSLDistance) {
+        const candidates = [s60.refHigh, s60.refLow, s240.refHigh, s240.refLow, sD.refHigh, sD.refLow, sW.refHigh, sW.refLow, sM.refHigh, sM.refLow, s12M.refHigh, s12M.refLow, protSwing?.protHigh ?? null, protSwing?.protLow ?? null]
+        const rrUsed = pickNearestRR('sell', bar1m.close, sl, candidates, params.precisionRRLevels)
+        const tp = buildSingleTP('sell', bar1m.close, sl, rrUsed)
+        const { outcome, resolvedAt, barsToResolve } = walkForOutcome(bars1m, i, 'sell', sl, tp)
+        signals.push({
+          time: t, signalType: 'precision', path: '', direction: 'sell',
+          execTf: '1', htfRung: precisionHtfRung(rejTiers, true),
+          entry: bar1m.close, sl, tp, rrUsed, gradeValue: grade(-1, i),
+          outcome, resolvedAt, barsToResolve,
+        })
       }
     }
 
@@ -685,19 +554,21 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
       { ev: sD, tag: 'D' }, { ev: sW, tag: 'W' }, { ev: sM, tag: 'M' }, { ev: s12M, tag: '12M' },
     ]
 
+    // STAGE SYNC: Setup A -- 3 conditions only (context/position + BOS
+    // + 4H cycle gate). DXY agreement no longer required.
     const setupAFiredThisBar: { tag: string; dir: 'sell' | 'buy'; ev: BoxEvent }[] = []
     for (const { ev, tag } of htfTiers) {
       const trk = setupATrackers[tag]
 
       if (ev.csod) trk.usedSell = false
-      const rawSell = ev.state === -1 && anyExecSellBOS && sellFadeCycleOK && dxyConfirmsSell
+      const rawSell = ev.state === -1 && anyExecSellBOS && sellFadeCycleOK
       const firedSell = rawSell && !trk.usedSell && !trk.prevRawSell
       if (firedSell) trk.usedSell = true
       trk.prevRawSell = rawSell
       if (firedSell) setupAFiredThisBar.push({ tag, dir: 'sell', ev })
 
       if (ev.csod) trk.usedBuy = false
-      const rawBuy = ev.state === 1 && anyExecBuyBOS && buyFadeCycleOK && dxyConfirmsBuy
+      const rawBuy = ev.state === 1 && anyExecBuyBOS && buyFadeCycleOK
       const firedBuy = rawBuy && !trk.usedBuy && !trk.prevRawBuy
       if (firedBuy) trk.usedBuy = true
       trk.prevRawBuy = rawBuy
@@ -718,27 +589,36 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
 
       if (selected) {
         const dirNum = selected.dir === 'sell' ? -1 : 1
-        const { sl, tp } = calcExitsHtfSourced(selected.dir, bar1m.close, selected.ev.refHigh, selected.ev.refLow, protSwing, atrValue, params)
+        // STAGE SYNC: ALWAYS anchored to 15m + protected swing now,
+        // never the source HTF box's own edges (that's the whole
+        // point of Stage 26's unification).
+        const sl = calcSL(selected.dir, bar1m.close, s15.refHigh, s15.refLow, protSwing?.protHigh ?? null, protSwing?.protLow ?? null, params)
         if (Math.abs(bar1m.close - sl) >= minSLDistance) {
+          const candidates = [s60.refHigh, s60.refLow, s240.refHigh, s240.refLow, sD.refHigh, sD.refLow, sW.refHigh, sW.refLow, sM.refHigh, sM.refLow, s12M.refHigh, s12M.refLow, protSwing?.protHigh ?? null, protSwing?.protLow ?? null]
+          const rrUsed = pickNearestRR(selected.dir, bar1m.close, sl, candidates, params.sniperRRLevels)
+          const tp = buildSingleTP(selected.dir, bar1m.close, sl, rrUsed)
           const { outcome, resolvedAt, barsToResolve } = walkForOutcome(bars1m, i, selected.dir, sl, tp)
           signals.push({
             time: t, signalType: 'sniper_confirmation', path: 'setup_a', direction: selected.dir,
             execTf: execTfFor(s1, s3, s5, dirNum), htfRung: selected.tag,
-            entry: bar1m.close, sl, tp, gradeValue: grade(dirNum, i),
-            manualFilterPassed: null, outcome, resolvedAt, barsToResolve,
+            entry: bar1m.close, sl, tp, rrUsed, gradeValue: grade(dirNum, i),
+            outcome, resolvedAt, barsToResolve,
           })
         }
       }
     }
 
+    // STAGE SYNC: Setup B's realign stage no longer checks DXY (see
+    // updateSetupBTracker above), and its exits now use the SAME
+    // unified calcSL as Setup A/Precision, not a separate
+    // midpoint-anchored function.
     const setupBFiredThisBar: { tag: string; dir: number; ev: BoxEvent }[] = []
     for (const { ev, tag } of htfTiers) {
       const trk = setupBTrackers[tag]
       const boxRange = ev.refHigh - ev.refLow
       const fired = updateSetupBTracker(
         trk, ev.state, ev.refHigh, ev.refLow, ev.csod, ev.bos, ev.breakoutDist, boxRange,
-        bar1m.close, params, anyExecBuyCSOD, anyExecSellCSOD, buyFadeCycleOK, sellFadeCycleOK,
-        dxyConfirmsBuy, dxyConfirmsSell
+        bar1m.close, params, anyExecBuyCSOD, anyExecSellCSOD, buyFadeCycleOK, sellFadeCycleOK
       )
       if (fired) setupBFiredThisBar.push({ tag, dir: trk.armedDir, ev })
     }
@@ -753,14 +633,17 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
 
       if (selectedB) {
         const dirTxt: 'buy' | 'sell' = selectedB.dir === 1 ? 'buy' : 'sell'
-        const { sl, tp } = calcExitsMidpointSourced(dirTxt, bar1m.close, selectedB.ev.refHigh, selectedB.ev.refLow, atrValue, params)
+        const sl = calcSL(dirTxt, bar1m.close, s15.refHigh, s15.refLow, protSwing?.protHigh ?? null, protSwing?.protLow ?? null, params)
         if (Math.abs(bar1m.close - sl) >= minSLDistance) {
+          const candidates = [s60.refHigh, s60.refLow, s240.refHigh, s240.refLow, sD.refHigh, sD.refLow, sW.refHigh, sW.refLow, sM.refHigh, sM.refLow, s12M.refHigh, s12M.refLow, protSwing?.protHigh ?? null, protSwing?.protLow ?? null]
+          const rrUsed = pickNearestRR(dirTxt, bar1m.close, sl, candidates, params.sniperRRLevels)
+          const tp = buildSingleTP(dirTxt, bar1m.close, sl, rrUsed)
           const { outcome, resolvedAt, barsToResolve } = walkForOutcome(bars1m, i, dirTxt, sl, tp)
           signals.push({
             time: t, signalType: 'sniper_confirmation', path: 'setup_b', direction: dirTxt,
             execTf: execTfForSetupB(selectedB.dir, execTrackers), htfRung: selectedB.tag,
-            entry: bar1m.close, sl, tp, gradeValue: grade(selectedB.dir, i),
-            manualFilterPassed: null, outcome, resolvedAt, barsToResolve,
+            entry: bar1m.close, sl, tp, rrUsed, gradeValue: grade(selectedB.dir, i),
+            outcome, resolvedAt, barsToResolve,
           })
         }
       }
@@ -820,8 +703,7 @@ export function summarize(signals: SimulatedSignal[]): BacktestSummary {
   const losses = resolved.filter(s => s.outcome === 'stopped_out').length
   const stillOpen = signals.length - resolved.length
 
-  const POINT_SIZE = 0.01
-  const pointsBetween = (a: number, b: number) => Math.round(Math.abs(a - b) / POINT_SIZE)
+  const pointsBetween = (a: number, b: number) => Math.round(Math.abs(a - b) / POINT_VALUE)
   const netPoints = resolved.reduce((sum, s) => {
     if (s.outcome === 'tp_hit') return sum + pointsBetween(s.entry, s.tp)
     if (s.outcome === 'stopped_out') return sum - pointsBetween(s.entry, s.sl)
