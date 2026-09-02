@@ -26,7 +26,7 @@ interface AnalysedSignal {
   resolution: 'open' | 'successful' | 'unsuccessful'
 }
 
-const OPENROUTER_DAILY_LIMIT = 50 // keep in sync with analyse-signals-route.ts's DAILY_LIMIT
+const OPENROUTER_DAILY_LIMIT = 1000 // keep in sync with analyseSignal.ts's DAILY_LIMIT (name kept as-is -- see openrouter_usage table note below)
 
 function formatKenyaTime(iso: string) {
   try {
@@ -86,6 +86,10 @@ export default function AnalysedSignalsPage() {
   }
 
   const loadQuota = useCallback(async () => {
+    // Table name kept as 'openrouter_usage' deliberately across the
+    // vendor switch (OpenRouter -> briefly Gemini -> Groq) to avoid a
+    // schema migration cascade -- it's just a stable label now, not
+    // literally tied to OpenRouter anymore.
     const { data } = await supabase
       .from('openrouter_usage')
       .select('count')
@@ -187,7 +191,7 @@ export default function AnalysedSignalsPage() {
           <div className="w-px h-8 bg-[#1B232C]" />
           <div>
             <div className="font-mono text-[9px] tracking-widest text-[#7C8896] uppercase">Model</div>
-            <div className="font-mono text-sm text-white mt-0.5">Ling 3.0 Flash Fin</div>
+            <div className="font-mono text-sm text-white mt-0.5">GPT-OSS 120B (Groq)</div>
           </div>
         </div>
         <button

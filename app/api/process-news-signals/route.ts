@@ -7,8 +7,8 @@
 // against the already-cached calendar, no external API call, so
 // running this frequently is cheap even when it finds nothing to do.
 //
-// MODEL: separate OpenRouter account (OPENROUTER_API_KEY_NEWS_SIGNALS)
-// from Analysed Signals' key -- genuinely different feature (different
+// MODEL: separate Groq API key (GROQ_API_KEY_NEWS_SIGNALS) from
+// Analysed Signals' key -- genuinely different feature (different
 // trigger, different inputs, different prompt weighting), same
 // legitimate-separate-purpose reasoning as the other multi-account
 // splits in this project.
@@ -28,13 +28,18 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY as string
 )
 
-const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY_NEWS_SIGNALS
+// STAGE CHANGE: same vendor migration as analyse-signals, same
+// verified reasoning -- see analyseSignal.ts's own note for the full
+// evidence trail.
+// STAGE CHANGE: same vendor decision as analyse-signals -- see
+// analyseSignal.ts's own note for the full evidence trail (OpenRouter
+// failed for 3 days, Gemini skipped given prior unreliable
+// experience, landed on Groq's openai/gpt-oss-120b reasoning model).
+const GROQ_KEY = process.env.GROQ_API_KEY_NEWS_SIGNALS
+const MODEL = 'openai/gpt-oss-120b'
 // STAGE FIX: same fix as analyse-signals -- switched to OpenRouter's
 // own free-model meta-router instead of one pinned model, to avoid
-// the same oversubscription risk once this route is genuinely
-// exercised.
-const MODEL = 'openrouter/free'
-const DAILY_LIMIT = 50
+const DAILY_LIMIT = 1000
 const KEY_NAME = 'news_signals'
 const CRON_SECRET = process.env.CRON_SECRET
 const FINNHUB_KEY = process.env.FINNHUB_API_KEY
@@ -132,12 +137,12 @@ Respond with ONLY this JSON, no other text:
 {"verdict": "valid" or "invalid", "reasoning": "1-2 sentences, referencing the specific news/event and how it relates to this direction", "preferred_rr": <one number from the list, or null if valid>}`
 }
 
-async function callOpenRouter(prompt: string): Promise<any> {
-  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+async function callGroq(prompt: string): Promise<any> {
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${OPENROUTER_KEY}`,
+      'Authorization': `Bearer ${GROQ_KEY}`,
     },
     body: JSON.stringify({
       model: MODEL,
@@ -149,7 +154,7 @@ async function callOpenRouter(prompt: string): Promise<any> {
   })
   const data = await res.json()
   if (!res.ok || data.error) {
-    throw new Error(data.error?.message || `OpenRouter HTTP ${res.status}`)
+    throw new Error(data.error?.message || `Groq HTTP ${res.status}`)
   }
   const rawText = data?.choices?.[0]?.message?.content || ''
   const cleaned = rawText.replace(/```json|```/g, '').trim()
@@ -168,8 +173,8 @@ export async function GET(req: Request) {
     return Response.json({ skipped: true, reason: 'no_active_news_window' })
   }
 
-  if (!OPENROUTER_KEY) {
-    return Response.json({ error: 'OPENROUTER_API_KEY_NEWS_SIGNALS not set.' })
+  if (!GROQ_KEY) {
+    return Response.json({ error: 'GROQ_API_KEY_NEWS_SIGNALS not set.' })
   }
   if (!process.env.SUPABASE_SERVICE_KEY) {
     return Response.json({ error: 'SUPABASE_SERVICE_KEY not set.' })
@@ -213,7 +218,7 @@ export async function GET(req: Request) {
     }
 
     try {
-      const parsed = await callOpenRouter(buildPrompt(sig, activeEvent.label, newsText))
+      const parsed = await callGroq(buildPrompt(sig, activeEvent.label, newsText))
       creditsUsedThisRun++
 
       const verdict = parsed.verdict === 'invalid' ? 'invalid' : 'valid'

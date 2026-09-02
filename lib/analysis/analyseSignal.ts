@@ -13,9 +13,22 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY as string
 )
 
-const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY_ANALYSED_SIGNALS
-const MODEL = 'openrouter/free'
-export const DAILY_LIMIT = 50
+// STAGE CHANGE: replaced OpenRouter entirely, after three straight
+// days of confirmed zero successful analyses despite two real fixes
+// (stopping wasted retries, switching to OpenRouter's own free-model
+// router). Briefly tried Google Gemini's free tier (genuinely 1,500
+// req/day, verified before switching) as the replacement, but moved
+// to Groq instead given real prior experience that Gemini didn't
+// work out reliably in practice. Landed on openai/gpt-oss-120b
+// specifically -- one of Groq's dedicated "reasoning models", trained
+// for structured multi-factor judgment, a better fit for this task's
+// actual shape than a pure-speed small model. 1,000 requests/day on
+// this model, over 20x real daily signal volume -- capacity is a
+// non-issue. Groq's API is OpenAI SDK-compatible, same request/
+// response shape as the original OpenRouter integration.
+const GROQ_KEY = process.env.GROQ_API_KEY_ANALYSED_SIGNALS
+const MODEL = 'openai/gpt-oss-120b'
+export const DAILY_LIMIT = 1000
 const KEY_NAME = 'analysed_signals'
 
 const TD_KEY = process.env.TWELVEDATA_API_KEY_ANALYSED_SIGNALS
@@ -169,12 +182,12 @@ Respond with ONLY this JSON, no other text, no markdown fences:
 {"verdict": "valid" or "invalid", "reasoning": "1-2 sentences, referencing specific grade/confluence/filter values above", "preferred_rr": <one number from the allowed list above, or null if valid>}`
 }
 
-async function callOpenRouter(prompt: string): Promise<any> {
-  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+async function callGroq(prompt: string): Promise<any> {
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${OPENROUTER_KEY}`,
+      'Authorization': `Bearer ${GROQ_KEY}`,
     },
     body: JSON.stringify({
       model: MODEL,
@@ -186,7 +199,7 @@ async function callOpenRouter(prompt: string): Promise<any> {
   })
   const data = await res.json()
   if (!res.ok || data.error) {
-    throw new Error(data.error?.message || `OpenRouter HTTP ${res.status}`)
+    throw new Error(data.error?.message || `Groq HTTP ${res.status}`)
   }
   const rawText = data?.choices?.[0]?.message?.content || ''
   const cleaned = rawText.replace(/```json|```/g, '').trim()
@@ -206,8 +219,8 @@ export interface AnalyseResult {
 // each call correctly checks/updates quota itself rather than relying
 // on a caller to aggregate.
 export async function analyseOneSignal(sig: any): Promise<AnalyseResult> {
-  if (!OPENROUTER_KEY || !process.env.SUPABASE_SERVICE_KEY) {
-    return { signal_id: sig.signal_id, outcome: 'missing_config', detail: 'OPENROUTER_API_KEY_ANALYSED_SIGNALS or SUPABASE_SERVICE_KEY not set.' }
+  if (!GROQ_KEY || !process.env.SUPABASE_SERVICE_KEY) {
+    return { signal_id: sig.signal_id, outcome: 'missing_config', detail: 'GROQ_API_KEY_ANALYSED_SIGNALS or SUPABASE_SERVICE_KEY not set.' }
   }
 
   const enabled = await getToggleEnabled()
@@ -225,7 +238,7 @@ export async function analyseOneSignal(sig: any): Promise<AnalyseResult> {
   try {
     const priceCtx = await fetchPriceContext()
     const upcomingEvent = await getUpcomingHighImpactEvent(2)
-    const parsed = await callOpenRouter(buildPrompt(sig, priceCtx, upcomingEvent))
+    const parsed = await callGroq(buildPrompt(sig, priceCtx, upcomingEvent))
     await incrementUsage(1)
 
     const verdict: 'valid' | 'invalid' = parsed.verdict === 'invalid' ? 'invalid' : 'valid'
@@ -256,7 +269,7 @@ export async function analyseOneSignal(sig: any): Promise<AnalyseResult> {
     return { signal_id: sig.signal_id, outcome: 'analysed', verdict }
   } catch (err: any) {
     const msg = err?.message ?? String(err)
-    if (/rate limit/i.test(msg) || /free-models-per-day/i.test(msg)) {
+    if (/rate limit/i.test(msg) || /resource_exhausted/i.test(msg) || /quota/i.test(msg)) {
       await supabase.from('openrouter_usage').upsert({ usage_date: todayUTC(), key_name: KEY_NAME, count: DAILY_LIMIT })
       return { signal_id: sig.signal_id, outcome: 'stopped_early', detail: msg }
     }
