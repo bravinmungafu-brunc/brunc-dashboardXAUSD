@@ -349,7 +349,7 @@ export default function BacktestPage() {
                         <span className="text-[#7C8896]">{type.replace(/_/g, ' ')} <span className="text-[#3A434D]">· {stats.total}</span></span>
                         <span className="text-white">{stats.winRate !== null ? stats.winRate + '%' : '—'}</span>
                       </div>
-                      {n > 0 && <div className="text-[9px] mt-0.5" style={{ color: tier.color }}>n={n} -- {tier.label}</div>}
+                      {n > 0 && <div className="text-[9px] mt-0.5" style={{ color: tier.color }}>{tier.label}</div>}
                     </div>
                   )
                 })}
@@ -367,7 +367,7 @@ export default function BacktestPage() {
                           <span className="text-[#7C8896]">{path === 'setup_a' ? 'Setup A (CSOD+BOS)' : 'Setup B (realignment)'} <span className="text-[#3A434D]">· {stats.total}</span></span>
                           <span className="text-white">{stats.winRate !== null ? stats.winRate + '%' : '—'}</span>
                         </div>
-                        {n > 0 && <div className="text-[9px] mt-0.5" style={{ color: tier.color }}>n={n} -- {tier.label}</div>}
+                        {n > 0 && <div className="text-[9px] mt-0.5" style={{ color: tier.color }}>{tier.label}</div>}
                       </div>
                     )
                   })}
