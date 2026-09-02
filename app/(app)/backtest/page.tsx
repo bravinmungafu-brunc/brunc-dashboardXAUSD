@@ -28,6 +28,7 @@ interface ConfigDraft {
   id: number
   name: string
   overrides: ConfigOverrides
+  isQuickPreset: boolean // STAGE ADD: quick-added variants render as a minimal one-line summary, not the full checkbox card
 }
 
 interface ConfigResult {
@@ -99,14 +100,14 @@ export default function BacktestPage() {
   const atVariantCap = extraConfigs.length >= 3
 
   function addConfig() {
-    setExtraConfigs(prev => [...prev, { id: Date.now(), name: `Variant ${prev.length + 1}`, overrides: {} }])
+    setExtraConfigs(prev => [...prev, { id: Date.now(), name: `Variant ${prev.length + 1}`, overrides: {}, isQuickPreset: false }])
   }
   // STAGE ADD: adds a fully pre-filled preset in one click, per the
   // explicit request -- not just an empty form, the actual override
   // values land immediately, still editable afterward like any other
   // variant.
   function addQuickVariant(preset: { name: string; overrides: ConfigOverrides }) {
-    setExtraConfigs(prev => [...prev, { id: Date.now(), name: preset.name, overrides: { ...preset.overrides } }])
+    setExtraConfigs(prev => [...prev, { id: Date.now(), name: preset.name, overrides: { ...preset.overrides }, isQuickPreset: true }])
   }
   function removeConfig(id: number) {
     setExtraConfigs(prev => prev.filter(c => c.id !== id))
@@ -225,31 +226,60 @@ export default function BacktestPage() {
           Baseline (current live settings) — always included, uses every default from the live script.
         </div>
 
-        {extraConfigs.map(cfg => (
-          <div key={cfg.id} className="bg-[#0F141A] border border-[#1B232C] rounded-lg p-4 mb-3">
-            <div className="flex items-center justify-between mb-3">
-              <input value={cfg.name} onChange={e => updateConfigName(cfg.id, e.target.value)}
-                className="bg-transparent text-white font-mono text-sm border-b border-[#1B232C] focus:outline-none focus:border-[#2DD4BF] flex-1 mr-3" />
-              <button onClick={() => removeConfig(cfg.id)} className="text-[#F87171] font-mono text-xs">✕ remove</button>
+        {extraConfigs.map(cfg => {
+          if (cfg.isQuickPreset) {
+            // STAGE ADD: minimal display for quick-added presets --
+            // just the name and what it actually changes, no
+            // checkbox panel. Per explicit request: "click button,
+            // get variant, done" -- the full card was clutter for a
+            // preset that's already fully configured.
+            const summary = Object.entries(cfg.overrides)
+              .map(([k, v]) => `${OVERRIDE_FIELDS.find(f => f.key === k)?.label ?? k}: ${v}`)
+              .join(' · ')
+            return (
+              <div key={cfg.id} className="bg-[#0F141A] border border-[#1B232C] rounded-lg px-4 py-3 mb-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-white font-mono text-sm truncate">{cfg.name}</div>
+                  <div className="text-[#7C8896] font-mono text-[10px] truncate">{summary}</div>
+                </div>
+                <div className="flex items-center gap-3 flex-shrink-0">
+                  <button
+                    onClick={() => setExtraConfigs(prev => prev.map(c => c.id === cfg.id ? { ...c, isQuickPreset: false } : c))}
+                    className="text-[#2B8CE0] font-mono text-[10px]" title="Expand to add more settings to this variant">
+                    customize further
+                  </button>
+                  <button onClick={() => removeConfig(cfg.id)} className="text-[#F87171] font-mono text-xs">✕</button>
+                </div>
+              </div>
+            )
+          }
+
+          return (
+            <div key={cfg.id} className="bg-[#0F141A] border border-[#1B232C] rounded-lg p-4 mb-3">
+              <div className="flex items-center justify-between mb-3">
+                <input value={cfg.name} onChange={e => updateConfigName(cfg.id, e.target.value)}
+                  className="bg-transparent text-white font-mono text-sm border-b border-[#1B232C] focus:outline-none focus:border-[#2DD4BF] flex-1 mr-3" />
+                <button onClick={() => removeConfig(cfg.id)} className="text-[#F87171] font-mono text-xs">✕ remove</button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {OVERRIDE_FIELDS.map(field => {
+                  const enabled = field.key in cfg.overrides
+                  return (
+                    <div key={field.key} className="flex items-center gap-2">
+                      <input type="checkbox" checked={enabled}
+                        onChange={() => toggleOverrideEnabled(cfg.id, field.key)} />
+                      <span className="font-mono text-[11px] text-[#7C8896] flex-1">{field.label}</span>
+                      <input type="number" step={field.step} disabled={!enabled}
+                        value={enabled ? (cfg.overrides[field.key] as number) : ''}
+                        onChange={e => updateConfigOverride(cfg.id, field.key, parseFloat(e.target.value))}
+                        className="w-20 bg-[#0B0F14] border border-[#1B232C] rounded px-2 py-1 text-white font-mono text-xs disabled:opacity-30" />
+                    </div>
+                  )
+                })}
+              </div>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {OVERRIDE_FIELDS.map(field => {
-                const enabled = field.key in cfg.overrides
-                return (
-                  <div key={field.key} className="flex items-center gap-2">
-                    <input type="checkbox" checked={enabled}
-                      onChange={() => toggleOverrideEnabled(cfg.id, field.key)} />
-                    <span className="font-mono text-[11px] text-[#7C8896] flex-1">{field.label}</span>
-                    <input type="number" step={field.step} disabled={!enabled}
-                      value={enabled ? (cfg.overrides[field.key] as number) : ''}
-                      onChange={e => updateConfigOverride(cfg.id, field.key, parseFloat(e.target.value))}
-                      className="w-20 bg-[#0B0F14] border border-[#1B232C] rounded px-2 py-1 text-white font-mono text-xs disabled:opacity-30" />
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        ))}
+          )
+        })}
 
         <button onClick={run} disabled={running}
           className="mt-2 bg-[#2DD4BF] text-[#05070A] font-mono text-sm font-bold px-5 py-2.5 rounded-lg disabled:opacity-50">
