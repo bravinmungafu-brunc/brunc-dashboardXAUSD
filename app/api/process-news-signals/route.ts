@@ -29,7 +29,11 @@ const supabase = createClient(
 )
 
 const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY_NEWS_SIGNALS
-const MODEL = 'inclusionai/ling-3.0-flash-fin:free'
+// STAGE FIX: same fix as analyse-signals -- switched to OpenRouter's
+// own free-model meta-router instead of one pinned model, to avoid
+// the same oversubscription risk once this route is genuinely
+// exercised.
+const MODEL = 'openrouter/free'
 const DAILY_LIMIT = 50
 const KEY_NAME = 'news_signals'
 const CRON_SECRET = process.env.CRON_SECRET
