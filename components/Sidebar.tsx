@@ -119,7 +119,10 @@ export default function Sidebar() {
   function renderDot(item: typeof NAV[number], mobile: boolean) {
     if (item.href === '/news-signals' && newsWindowActive) {
       const pos = mobile ? 'top-1 right-1/2 translate-x-3' : 'top-1 left-6'
-      return <span className={`absolute ${pos} w-2 h-2 rounded-full bg-[#2B8CE0] animate-pulse z-10`} title="News window is active" />
+      // STAGE: brighter -- larger dot, real box-shadow glow, per
+      // explicit "shine like an alarm" request, matching the Topbar's
+      // treatment for the same news-active state.
+      return <span className={`absolute ${pos} w-3 h-3 rounded-full bg-[#2B8CE0] animate-pulse z-10`} style={{ boxShadow: '0 0 10px 3px #2B8CE0, 0 0 3px 1px #2B8CE0' }} title="News window is active" />
     }
     const showRedDot = (item.href === '/signals' && hasNewSignal) || (item.href === '/analysis' && hasStaleOpen)
     if (!showRedDot) return null
