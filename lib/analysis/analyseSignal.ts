@@ -193,7 +193,24 @@ async function callGroq(prompt: string): Promise<any> {
       model: MODEL,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.2,
-      max_tokens: 400,
+      max_tokens: 600,
+      // STAGE FIX: real bug found from live output -- 3 of 5 real
+      // attempts failed with truncated/malformed JSON ("unexpected
+      // end of JSON input", "unterminated string"). Root cause,
+      // confirmed directly from Groq's own API reference: gpt-oss-120b
+      // defaults to reasoning_effort "medium", spending real tokens on
+      // internal reasoning before writing the final answer -- with the
+      // old 400-token cap, that reasoning was eating the budget and
+      // cutting the actual JSON off mid-generation. Two fixes from the
+      // same docs: reasoning_effort "low" (spend fewer tokens on
+      // reasoning, appropriate for a quick binary judgment task, not a
+      // deep multi-step one) and reasoning_format "hidden" (keep any
+      // reasoning content out of the response entirely, so
+      // message.content is always just the clean final answer, never
+      // reasoning text mixed in). max_tokens also raised to 600 as
+      // extra headroom on top of both.
+      reasoning_effort: 'low',
+      reasoning_format: 'hidden',
     }),
     signal: AbortSignal.timeout(15000),
   })

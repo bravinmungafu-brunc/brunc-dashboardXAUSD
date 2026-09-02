@@ -148,7 +148,13 @@ async function callGroq(prompt: string): Promise<any> {
       model: MODEL,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.2,
-      max_tokens: 400,
+      max_tokens: 600,
+      // STAGE FIX: same fix as analyseSignal.ts -- see that file's own
+      // note for the full evidence trail (Groq's gpt-oss-120b defaults
+      // to medium reasoning effort, truncating the JSON response
+      // within a 400-token cap).
+      reasoning_effort: 'low',
+      reasoning_format: 'hidden',
     }),
     signal: AbortSignal.timeout(15000),
   })
