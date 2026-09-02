@@ -293,6 +293,11 @@ export default function BacktestPage() {
         <div className="font-mono text-[10px] text-[#7C8896] mb-5">
           Bars fetched: 1m {meta.barsCounts['1m']} · 5m {meta.barsCounts['5m']} · 15m {meta.barsCounts['15m']} · 1h {meta.barsCounts['1h']} · 4h {meta.barsCounts['4h']} · D {meta.barsCounts['D']} · W {meta.barsCounts['W']} · M {meta.barsCounts['M']}
           <span className="ml-3">Twelve Data used: {meta.used}/{meta.limit} today ({meta.creditsUsed} this run)</span>
+          {meta.oneMinuteRangeActuallyFetched && (
+            <div className="mt-1 text-[#F5A623]">
+              1m data actually covers: {meta.oneMinuteRangeActuallyFetched.earliest} to {meta.oneMinuteRangeActuallyFetched.latest} -- compare against your requested start/end date above.
+            </div>
+          )}
         </div>
       )}
 

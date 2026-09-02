@@ -170,6 +170,15 @@ export async function POST(req: Request) {
           '1h': sixtyMin.bars.length, '4h': fourHour.bars.length, 'D': daily.bars.length,
           'W': weekly.bars.length, 'M': monthly.bars.length,
         },
+        // STAGE ADD: real diagnostic -- '1m 5000' alone doesn't tell
+        // us whether that 5000 genuinely spans the full requested
+        // range, or whether pagination silently stopped after one
+        // page and only covers a recent sub-window. This shows the
+        // actual earliest/latest timestamp fetched, directly
+        // answerable instead of inferred from a bar count alone.
+        oneMinuteRangeActuallyFetched: oneMin.bars.length > 0
+          ? { earliest: oneMin.bars[0].time, latest: oneMin.bars[oneMin.bars.length - 1].time }
+          : null,
         creditsUsed,
         used: used + creditsUsed,
         limit: DAILY_LIMIT,
