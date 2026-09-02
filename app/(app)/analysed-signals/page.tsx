@@ -251,8 +251,8 @@ export default function AnalysedSignalsPage() {
                     <div className="font-mono text-[10px] text-[#7C8896] mt-1.5">{formatKenyaTime(sig.created_at)}</div>
                   </div>
                   <div className="font-mono text-xs text-[#7C8896] text-right">
-                    <div>Entry <span className="text-white">{sig.entry?.toFixed(3) ?? '—'}</span></div>
-                    <div>SL <span className="text-[#F87171]">{sig.sl?.toFixed(3) ?? '—'}</span> · TP <span className="text-[#34D399]">{sig.tp?.toFixed(3) ?? '—'}</span> · R:R <span className="text-white">{sig.rr != null ? '1:' + sig.rr : '—'}</span></div>
+                    <div>Entry <span className="text-white">{sig.entry != null ? Number(sig.entry).toFixed(3) : '—'}</span></div>
+                    <div>SL <span className="text-[#F87171]">{sig.sl != null ? Number(sig.sl).toFixed(3) : '—'}</span> · TP <span className="text-[#34D399]">{sig.tp != null ? Number(sig.tp).toFixed(3) : '—'}</span> · R:R <span className="text-white">{sig.rr != null ? '1:' + sig.rr : '—'}</span></div>
                   </div>
                 </div>
 
@@ -268,15 +268,15 @@ export default function AnalysedSignalsPage() {
                     <div className="grid grid-cols-3 gap-2.5 mt-3 pt-3 border-t border-[#1B232C]">
                       <div className="bg-[#0B0F14] rounded-lg p-2.5">
                         <div className="text-[9px] text-[#7C8896] uppercase tracking-wide mb-1 font-mono">Preferred entry</div>
-                        <div className="text-white font-mono text-sm">{sig.llm_entry.toFixed(3)}</div>
+                        <div className="text-white font-mono text-sm">{sig.llm_entry != null ? Number(sig.llm_entry).toFixed(3) : '—'}</div>
                       </div>
                       <div className="bg-[#0B0F14] rounded-lg p-2.5">
                         <div className="text-[9px] text-[#7C8896] uppercase tracking-wide mb-1 font-mono">Preferred SL</div>
-                        <div className="text-[#F87171] font-mono text-sm">{sig.llm_sl?.toFixed(3)}</div>
+                        <div className="text-[#F87171] font-mono text-sm">{sig.llm_sl != null ? Number(sig.llm_sl).toFixed(3) : '—'}</div>
                       </div>
                       <div className="bg-[#0B0F14] rounded-lg p-2.5">
                         <div className="text-[9px] text-[#7C8896] uppercase tracking-wide mb-1 font-mono">Preferred TP · R:R</div>
-                        <div className="text-[#34D399] font-mono text-sm">{sig.llm_tp?.toFixed(3)} · 1:{sig.llm_rr}</div>
+                        <div className="text-[#34D399] font-mono text-sm">{sig.llm_tp != null ? Number(sig.llm_tp).toFixed(3) : '—'} · 1:{sig.llm_rr}</div>
                       </div>
                     </div>
                   )}
