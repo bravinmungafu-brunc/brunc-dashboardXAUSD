@@ -118,7 +118,21 @@ export async function GET(req: Request) {
   const marketStateKnown = (await getSetting('last_known_market_open')) !== null
   const wasMarketOpen = (await getSetting('last_known_market_open')) === 'true'
 
-  if (marketStateKnown && marketOpenNow !== wasMarketOpen) {
+  if (!marketStateKnown) {
+    // STAGE FIX: real usability flaw -- the first run used to seed
+    // market state SILENTLY, so a brand-new setup showed a completely
+    // empty notification panel with no way to tell "working correctly,
+    // nothing has changed yet" apart from "broken". Now the first run
+    // emits one baseline notification stating current status, so the
+    // panel is never ambiguous.
+    const sessionText = currentSession ? `${currentSession.name} session active` : 'no session currently active'
+    await supabase.from('notifications').insert({
+      type: 'market_status',
+      message: `Notifications are now live. Currently: markets ${marketOpenNow ? 'open' : 'closed'}, ${sessionText}.`,
+      detail: 'Baseline status -- future notifications will appear as sessions change, news goes live, or price levels break.',
+    })
+    results.push('baseline status notification created')
+  } else if (marketOpenNow !== wasMarketOpen) {
     const message = marketOpenNow ? 'Markets are now open.' : 'Markets are now closed for the weekend.'
     await supabase.from('notifications').insert({ type: 'market_status', message, detail: null })
     results.push(`market: ${message}`)
