@@ -82,9 +82,9 @@ function daysAgoISO(n: number) {
 // statistical rule of thumb (variance of a win-rate estimate shrinks
 // substantially past ~30), not a precise cutoff.
 function sampleTier(n: number): { label: string; color: string } {
-  if (n < 10) return { label: `only ${n} -- do not trust this number`, color: '#F87171' }
-  if (n < 30) return { label: `only ${n} -- treat as a rough signal, not proof`, color: '#F5A623' }
-  return { label: `${n} -- reasonable sample`, color: '#34D399' }
+  if (n < 10) return { label: `n=${n} -- very small sample`, color: '#F87171' }
+  if (n < 30) return { label: `n=${n} -- small sample`, color: '#F5A623' }
+  return { label: `n=${n} -- reasonable sample`, color: '#34D399' }
 }
 
 const OVERRIDE_FIELDS: { key: keyof ConfigOverrides; label: string; step: number }[] = [

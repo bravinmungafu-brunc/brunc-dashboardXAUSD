@@ -806,8 +806,20 @@ function precisionCycleDirAt(chain15: BoxEvent[], bars15: Bar[], t: string): num
     if (box.time >= t) break
     if (box.csod) { cycleDir = 0; wasOutsideLow = false; wasOutsideHigh = false }
 
-    const nowOutsideLow = box.state === 1 && bars15[idx].close < box.refLow
-    const nowOutsideHigh = box.state === -1 && bars15[idx].close > box.refHigh
+    // STAGE FIX: real bug found -- explains Precision showing
+    // literally 0 across every variant, including the "looser
+    // Precision" one (which changed nothing, correctly pointing the
+    // blame away from htfMidRejMinCount and at this).
+    // The engine had `box.state === 1 &&` / `box.state === -1 &&`
+    // guards here that DO NOT exist in the real Pine (whose
+    // buyFadeQualified/sellFadeQualified check only the price vs the
+    // box edge). Those guards made this logically near-impossible:
+    // if close drops below refLow, getBoxChain has ALREADY flipped
+    // state to -1 and reset the box, so `state===1 && close<refLow`
+    // essentially never co-occurs -- the cycle could never arm, so
+    // Precision could never fire. Removed to match Pine.
+    const nowOutsideLow = bars15[idx].close < box.refLow
+    const nowOutsideHigh = bars15[idx].close > box.refHigh
     const nowInside = bars15[idx].close >= box.refLow && bars15[idx].close <= box.refHigh
 
     if (wasOutsideLow && nowInside) cycleDir = 1
