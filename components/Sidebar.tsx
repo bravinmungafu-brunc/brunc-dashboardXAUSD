@@ -49,6 +49,7 @@ export default function Sidebar() {
   const router = useRouter()
   const [hasNewSignal, setHasNewSignal] = useState(false)
   const [hasStaleOpen, setHasStaleOpen] = useState(false)
+  const [hasNewAnalysedSignal, setHasNewAnalysedSignal] = useState(false)
   const [newsWindowActive, setNewsWindowActive] = useState(false)
 
   async function handleLogout() {
@@ -70,6 +71,23 @@ export default function Sidebar() {
       }
     }
     checkForNew()
+
+    // STAGE ADD: same pattern as checkForNew above, applied to
+    // analysed_signals -- per explicit request for the same
+    // "unopened new item" treatment on this section too.
+    async function checkForNewAnalysed() {
+      const { data } = await supabase
+        .from('analysed_signals')
+        .select('created_at')
+        .order('created_at', { ascending: false })
+        .limit(1)
+      const latest = data?.[0]?.created_at
+      const lastSeen = localStorage.getItem('brunc_analysed_signals_last_seen')
+      if (latest && (!lastSeen || new Date(latest) > new Date(lastSeen))) {
+        setHasNewAnalysedSignal(true)
+      }
+    }
+    checkForNewAnalysed()
 
     async function checkStaleOpen() {
       const cutoff = new Date(Date.now() - STALE_OPEN_HOURS * 3_600_000).toISOString()
@@ -105,6 +123,9 @@ export default function Sidebar() {
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'signals' }, () => {
         checkStaleOpen()
       })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'analysed_signals' }, () => {
+        setHasNewAnalysedSignal(true)
+      })
       .subscribe()
     return () => { supabase.removeChannel(channel); clearInterval(newsInterval) }
   }, [])
@@ -113,6 +134,10 @@ export default function Sidebar() {
     if (pathname === '/signals') {
       localStorage.setItem('brunc_signals_last_seen', new Date().toISOString())
       setHasNewSignal(false)
+    }
+    if (pathname === '/analysed-signals') {
+      localStorage.setItem('brunc_analysed_signals_last_seen', new Date().toISOString())
+      setHasNewAnalysedSignal(false)
     }
   }, [pathname])
 
@@ -123,6 +148,15 @@ export default function Sidebar() {
       // explicit "shine like an alarm" request, matching the Topbar's
       // treatment for the same news-active state.
       return <span className={`absolute ${pos} w-3 h-3 rounded-full bg-[#2B8CE0] animate-pulse z-10`} style={{ boxShadow: '0 0 10px 3px #2B8CE0, 0 0 3px 1px #2B8CE0' }} title="News window is active" />
+    }
+    // STAGE ADD: same bright glow treatment for a NEW unopened
+    // analysed signal, per explicit request -- "the same [as the red
+    // dot on Signals] but it should be bright shining the whole
+    // section," matching News' visual language rather than the
+    // smaller plain red dot used elsewhere.
+    if (item.href === '/analysed-signals' && hasNewAnalysedSignal) {
+      const pos = mobile ? 'top-1 right-1/2 translate-x-3' : 'top-1 left-6'
+      return <span className={`absolute ${pos} w-3 h-3 rounded-full bg-[#2DD4BF] animate-pulse z-10`} style={{ boxShadow: '0 0 10px 3px #2DD4BF, 0 0 3px 1px #2DD4BF' }} title="A new signal has been analysed" />
     }
     const showRedDot = (item.href === '/signals' && hasNewSignal) || (item.href === '/analysis' && hasStaleOpen)
     if (!showRedDot) return null

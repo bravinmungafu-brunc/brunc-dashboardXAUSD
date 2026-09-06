@@ -1,20 +1,18 @@
 // app/api/check-transitions/route.ts
 //
-// Cron-triggered (suggest every 5 minutes, matching news-window
-// granularity elsewhere in this project). Detects two kinds of real
-// state TRANSITIONS -- not current state, which session/news pages
-// already show live -- and writes a notification row the moment
-// either one actually changes:
-//   1. Session change: e.g. London ended, New York began.
-//   2. News window going live: a high-impact event just entered its
-//      active window.
-// "Last known state" is tracked in app_settings (reused rather than a
-// new table, since it's just two small scalar values) so a genuine
-// transition can be detected by comparing against what was true last
-// time this ran.
+// Cron-triggered (every 5 minutes). Detects real state transitions
+// and writes a notification row for each:
+//   1. Session change (existing) -- e.g. London ended, NY began.
+//   2. News window going live (existing).
+//   3. Upcoming session warning (NEW) -- a session is about to begin.
+//   4. Market open/closed transition (NEW).
+//   5. Daily/weekly high-low break (NEW) -- live price crossed the
+//      previous completed day's or week's high/low.
+// "Last known state" tracked in app_settings throughout.
 
 import { createClient } from '@supabase/supabase-js'
-import { getActiveSession } from '@/lib/sessions'
+import { getActiveSession, isMarketOpen, getUpcomingSession } from '@/lib/sessions'
+import { checkPriceLevelBreaks } from '@/lib/priceLevels'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL as string,
@@ -33,9 +31,6 @@ async function setSetting(key: string, value: string) {
   await supabase.from('app_settings').upsert({ key, value })
 }
 
-// Same active-news-window check as news-window-status route -- kept
-// as a direct inline query rather than an internal HTTP self-call
-// (fragile in serverless contexts) since it's small and self-contained.
 async function getActiveNewsEvent(): Promise<{ label: string } | null> {
   const now = new Date()
   const windowStart = new Date(now.getTime() - 30 * 60000)
@@ -56,6 +51,10 @@ async function getActiveNewsEvent(): Promise<{ label: string } | null> {
   return { label: `${e.currency ?? ''} ${e.event_name ?? 'economic event'} (${e.impact ?? 'high'} impact)` }
 }
 
+function formatPrice(p: number): string {
+  return p.toFixed(2)
+}
+
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   if (!CRON_SECRET || searchParams.get('secret') !== CRON_SECRET) {
@@ -63,9 +62,10 @@ export async function GET(req: Request) {
   }
 
   const results: string[] = []
+  const now = new Date()
 
-  // --- Session transition ---
-  const currentSession = getActiveSession()
+  // --- 1. Session transition (existing) ---
+  const currentSession = getActiveSession(now)
   const currentSessionName = currentSession?.name ?? ''
   const lastSessionName = (await getSetting('last_known_session')) ?? ''
 
@@ -83,7 +83,7 @@ export async function GET(req: Request) {
     results.push(`session: ${message}`)
   }
 
-  // --- News window transition ---
+  // --- 2. News window transition (existing) ---
   const activeEvent = await getActiveNewsEvent()
   const isNewsActiveNow = !!activeEvent
   const wasNewsActive = (await getSetting('last_known_news_active')) === 'true'
@@ -95,6 +95,52 @@ export async function GET(req: Request) {
   }
   if (isNewsActiveNow !== wasNewsActive) {
     await setSetting('last_known_news_active', String(isNewsActiveNow))
+  }
+
+  // --- 3. STAGE ADD: upcoming session warning ---
+  // Fires once per upcoming session, not every cycle -- tracks which
+  // session it already warned about via last_warned_upcoming_session,
+  // separate from last_known_session (which only updates once the
+  // session actually BEGINS).
+  const upcoming = getUpcomingSession(now, 10)
+  if (upcoming) {
+    const alreadyWarned = (await getSetting('last_warned_upcoming_session')) === upcoming.name
+    if (!alreadyWarned) {
+      const message = `${upcoming.name} session starting soon.`
+      await supabase.from('notifications').insert({ type: 'session_upcoming', message, detail: upcoming.detail })
+      await setSetting('last_warned_upcoming_session', upcoming.name)
+      results.push(`upcoming: ${message}`)
+    }
+  }
+
+  // --- 4. STAGE ADD: market open/closed transition ---
+  const marketOpenNow = isMarketOpen(now)
+  const marketStateKnown = (await getSetting('last_known_market_open')) !== null
+  const wasMarketOpen = (await getSetting('last_known_market_open')) === 'true'
+
+  if (marketStateKnown && marketOpenNow !== wasMarketOpen) {
+    const message = marketOpenNow ? 'Markets are now open.' : 'Markets are now closed for the weekend.'
+    await supabase.from('notifications').insert({ type: 'market_status', message, detail: null })
+    results.push(`market: ${message}`)
+  }
+  await setSetting('last_known_market_open', String(marketOpenNow))
+
+  // --- 5. STAGE ADD: daily/weekly high-low break ---
+  // Only worth checking while markets are actually open -- avoids a
+  // spurious "live price" read against a closed/stale market.
+  if (marketOpenNow) {
+    const breaks = await checkPriceLevelBreaks()
+    for (const b of breaks) {
+      const labelMap: Record<string, string> = {
+        daily_high: "Yesterday's daily high",
+        daily_low: "Yesterday's daily low",
+        weekly_high: "Last week's high",
+        weekly_low: "Last week's low",
+      }
+      const message = `${labelMap[b.type]} (${formatPrice(b.level)}) has been broken -- live price ${formatPrice(b.livePrice)}.`
+      await supabase.from('notifications').insert({ type: 'price_level_break', message, detail: b.type })
+      results.push(`price_level: ${message}`)
+    }
   }
 
   return Response.json({ checked: true, transitions: results })

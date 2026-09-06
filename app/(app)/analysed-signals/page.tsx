@@ -45,6 +45,7 @@ export default function AnalysedSignalsPage() {
   const [loaded, setLoaded] = useState(false)
   const [toggling, setToggling] = useState(false)
   const [signals, setSignals] = useState<AnalysedSignal[]>([])
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [resolutionFilter, setResolutionFilter] = useState<'all' | 'successful' | 'unsuccessful' | 'open'>('all')
   const [quotaUsed, setQuotaUsed] = useState(0)
 
@@ -100,11 +101,26 @@ export default function AnalysedSignalsPage() {
   }, [])
 
   const loadSignals = useCallback(async () => {
-    const { data: analysed } = await supabase
+    const { data: analysed, error } = await supabase
       .from('analysed_signals')
       .select('*')
       .order('created_at', { ascending: false })
       .limit(50)
+
+    // STAGE FIX: real bug found -- this used to destructure only
+    // `data`, discarding `error` entirely. That meant a genuine query
+    // failure (e.g. a Row Level Security policy silently denying the
+    // anon/authenticated client, even though the SAME table reads
+    // fine via a service-role backend query) looked EXACTLY like "the
+    // table is just empty" -- indistinguishable without opening
+    // browser dev tools, which isn't always available. Now surfaces
+    // the real error directly on the page.
+    if (error) {
+      setLoadError(`Could not load analysed signals: ${error.message}. If this mentions permission or policy, the analysed_signals table likely needs a Row Level Security SELECT policy for the anon/authenticated role -- it currently works from backend service-role queries but not from this page.`)
+      setSignals([])
+      return
+    }
+    setLoadError(null)
 
     if (!analysed || analysed.length === 0) {
       setSignals([])
@@ -229,6 +245,12 @@ export default function AnalysedSignalsPage() {
         ))}
       </div>
 
+      {loadError && (
+        <div className="bg-[#F87171]/10 border border-[#F87171]/25 rounded-2xl px-5 py-4 mono text-xs text-[#F87171] mb-5">
+          {loadError}
+        </div>
+      )}
+
       {filtered.length === 0 ? (
         <div className="bg-[#0B0F14] border border-[#1B232C] border-dashed rounded-2xl p-10 text-center">
           <div className="mono text-[11px] text-[#7C8896]">No analysed signals in this view yet — waiting on live signal feed.</div>
@@ -237,6 +259,14 @@ export default function AnalysedSignalsPage() {
         <div className="space-y-4 mb-8">
           {filtered.map(sig => {
             const isValid = sig.verdict === 'valid'
+            // STAGE ADD: per explicit request -- each card now shows
+            // its own real status directly, not just buried in the
+            // bottom Resolved section.
+            const statusBadge = sig.resolution === 'open'
+              ? { label: 'OPEN', color: '#F5A623' }
+              : sig.resolution === 'successful'
+                ? { label: 'TP HIT', color: '#34D399' }
+                : { label: 'SL HIT', color: '#F87171' }
             return (
               <div key={sig.rowId} className="bg-[#0B0F14] border border-[#1B232C] rounded-xl overflow-hidden">
                 <div className="p-5 flex justify-between items-start flex-wrap gap-3 border-b border-[#1B232C]">
@@ -246,6 +276,9 @@ export default function AnalysedSignalsPage() {
                       {sig.direction.toUpperCase()} {sig.symbol}
                       <span className="font-mono text-[10px] px-2 py-0.5 rounded border border-[#2DD4BF] text-[#2DD4BF]">
                         {sig.signal_type === 'precision' ? 'PRECISION' : 'SNIPER CONFIRMATION'}
+                      </span>
+                      <span className="font-mono text-[10px] px-2 py-0.5 rounded border font-bold" style={{ borderColor: statusBadge.color, color: statusBadge.color }}>
+                        {statusBadge.label}
                       </span>
                     </span>
                     <div className="font-mono text-[10px] text-[#7C8896] mt-1.5">{formatKenyaTime(sig.created_at)}</div>

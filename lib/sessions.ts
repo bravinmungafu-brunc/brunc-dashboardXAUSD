@@ -63,3 +63,52 @@ export function getActiveSession(date: Date = new Date()): ActiveSession | null 
   if (isSydney) return { name: 'SYDNEY', detail: 'Sydney session' }
   return null
 }
+
+// STAGE ADD: market open/closed, per explicit request, verified
+// against multiple current, consistent sources before building --
+// gold/XAUUSD opens Sunday 22:00 UTC (5pm ET) and closes Friday 22:00
+// UTC (5pm ET), closed the rest of the weekend. Built the same
+// DST-safe way as sessions above: checks New York's REAL local
+// weekday/hour via Intl.DateTimeFormat, rather than a hardcoded UTC
+// boundary that would drift wrong at the next US DST transition.
+export function isMarketOpen(date: Date = new Date()): boolean {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', hour12: false,
+  }).formatToParts(date)
+  const weekday = parts.find(p => p.type === 'weekday')?.value ?? ''
+  const hourStr = parts.find(p => p.type === 'hour')?.value ?? '0'
+  const hour = parseInt(hourStr, 10) % 24
+
+  if (weekday === 'Fri' && hour >= 17) return false
+  if (weekday === 'Sat') return false
+  if (weekday === 'Sun' && hour < 17) return false
+  return true
+}
+
+// STAGE ADD: UI-friendly wrapper around isMarketOpen -- the frontend
+// wants both the boolean AND a human-readable detail string for its
+// tooltip, kept as a thin wrapper rather than duplicating the actual
+// open/closed logic a second time.
+export function getMarketStatus(date: Date = new Date()): { open: boolean; detail: string } {
+  const open = isMarketOpen(date)
+  return {
+    open,
+    detail: open ? 'Gold market is open' : 'Gold market is closed until Sunday 22:00 UTC (5pm ET)',
+  }
+}
+
+// STAGE ADD: look ahead a few minutes to see if a NEW session is
+// about to begin, for the "session incoming" advance-notice
+// notification. Checks lookAheadMinutes into the future using the
+// exact same getActiveSession logic, comparing against right now --
+// if they differ and the future one is non-null, that's a genuine
+// upcoming session worth flagging in advance.
+export function getUpcomingSession(date: Date = new Date(), lookAheadMinutes: number = 10): ActiveSession | null {
+  const future = new Date(date.getTime() + lookAheadMinutes * 60000)
+  const currentSession = getActiveSession(date)
+  const futureSession = getActiveSession(future)
+  if (futureSession && futureSession.name !== currentSession?.name) {
+    return futureSession
+  }
+  return null
+}

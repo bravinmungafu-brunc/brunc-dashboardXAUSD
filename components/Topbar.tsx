@@ -2,7 +2,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
-import { getActiveSession, type ActiveSession } from '@/lib/sessions'
+import { getActiveSession, getMarketStatus, type ActiveSession } from '@/lib/sessions'
 
 function getKenyaTime() {
   return new Intl.DateTimeFormat('en-KE', {
@@ -72,6 +72,7 @@ function glowStyle(color: string) {
 
 export default function Topbar() {
   const [activeSession, setActiveSession] = useState<ActiveSession | null>(null)
+  const [marketStatus, setMarketStatus] = useState<{ open: boolean; detail: string } | null>(null)
   const [eatTime, setEatTime] = useState('—')
   const [lastSignalMs, setLastSignalMs] = useState<number | null>(null)
   const [lastSignalKnown, setLastSignalKnown] = useState(false)
@@ -94,6 +95,7 @@ export default function Topbar() {
 
   useEffect(() => {
     setActiveSession(getActiveSession())
+    setMarketStatus(getMarketStatus())
     setEatTime(getKenyaTime())
 
     async function checkLastSignal() {
@@ -128,6 +130,7 @@ export default function Topbar() {
 
     const interval = setInterval(() => {
       setActiveSession(getActiveSession())
+      setMarketStatus(getMarketStatus())
       setEatTime(getKenyaTime())
       setLastSignalMs(prev => (prev == null ? null : prev + 30000))
       checkNewsWindow()
@@ -197,6 +200,16 @@ export default function Topbar() {
           </span>
         )}
 
+        {/* STAGE ADD: market open/closed -- real OANDA XAUUSD schedule
+            via lib/sessions.ts, light blue and glowing in BOTH states
+            per explicit request (not just when active like news/session). */}
+        {marketStatus && (
+          <span className="flex items-center gap-2 flex-shrink-0 px-2.5 py-1.5 rounded border-2 border-[#7DD3FC] bg-[#7DD3FC]/20" title={marketStatus.detail}>
+            <span className="w-2.5 h-2.5 rounded-full bg-[#7DD3FC] animate-pulse" style={glowStyle('#7DD3FC')} />
+            <span className="text-[#7DD3FC] font-bold">{marketStatus.open ? 'MARKET OPEN' : 'MARKET CLOSED'}</span>
+          </span>
+        )}
+
         {/* STAGE: brighter session indicator, same treatment, plus now
             genuinely DST-aware via the shared lib/sessions module */}
         {activeSession && (
@@ -235,7 +248,13 @@ export default function Topbar() {
                   {notifications.map(n => (
                     <div key={n.id} className="px-4 py-3">
                       <div className="flex items-start gap-2">
-                        <span className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${n.type === 'news_live' ? 'bg-[#2B8CE0]' : 'bg-[#2DD4BF]'}`} />
+                        <span className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${
+                          n.type === 'news_live' ? 'bg-[#2B8CE0]'
+                          : n.type === 'session_upcoming' ? 'bg-[#F5A623]'
+                          : n.type === 'market_status' ? 'bg-[#7DD3FC]'
+                          : n.type === 'price_level_break' ? 'bg-[#F87171]'
+                          : 'bg-[#2DD4BF]'
+                        }`} />
                         <div className="min-w-0">
                           <div className="text-white text-xs leading-snug">{n.message}</div>
                           <div className="text-[#7C8896] font-mono text-[10px] mt-1">{formatNotificationTime(n.created_at)}</div>
