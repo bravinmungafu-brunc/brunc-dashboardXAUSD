@@ -564,8 +564,14 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): { signa
       { ev: s60, tag: '60' }, { ev: s240, tag: '240' }, { ev: sD, tag: 'D' },
       { ev: sW, tag: 'W' }, { ev: sM, tag: 'M' }, { ev: s12M, tag: '12M' },
     ] as { ev: BoxEvent | null; tag: string }[]).filter((x): x is { ev: BoxEvent; tag: string } => x.ev != null)
-    const midRejSellCount = rejTiers.filter(ev => ev.rejHighCount >= 2).length
-    const midRejBuyCount = rejTiers.filter(ev => ev.rejLowCount >= 2).length
+    // STAGE FIX: real bug caught by the type checker -- rejTiers holds
+    // wrapper objects ({ ev, tag }) since the null-filtering refactor
+    // above, but these two lines still treated each item as if it
+    // WERE the BoxEvent. Needed .ev to reach the actual data. Worth
+    // noting this wasn't only a type error: it would have silently
+    // broken the HTF mid-rejection count that gates Precision.
+    const midRejSellCount = rejTiers.filter(x => x.ev.rejHighCount >= 2).length
+    const midRejBuyCount = rejTiers.filter(x => x.ev.rejLowCount >= 2).length
     const anyHtfMidRejSell = midRejSellCount >= params.htfMidRejMinCount
     const anyHtfMidRejBuy = midRejBuyCount >= params.htfMidRejMinCount
 
