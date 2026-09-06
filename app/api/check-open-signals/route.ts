@@ -60,7 +60,7 @@ async function incrementUsage(by: number): Promise<number> {
 
 const INTERVAL_MAP: Record<string, string> = { '1': '1min', '3': '5min', '5': '5min' }
 
-interface RawBar { time: string; high: number; low: number }
+interface RawBar { time: string; open: number; high: number; low: number }
 
 async function fetchBarsSince(fromIso: string, interval: string): Promise<{ bars: RawBar[]; raw: any }> {
   const startParam = new Date(fromIso).toISOString().slice(0, 19).replace('T', ' ')
@@ -79,7 +79,7 @@ async function fetchBarsSince(fromIso: string, interval: string): Promise<{ bars
   // later bar can appear "less than" an earlier cursor purely
   // because 'T' and ' ' sort differently at that character position).
   const bars: RawBar[] = data.values
-    .map((v: any) => ({ time: v.datetime, high: parseFloat(v.high), low: parseFloat(v.low) }))
+    .map((v: any) => ({ time: v.datetime, open: parseFloat(v.open), high: parseFloat(v.high), low: parseFloat(v.low) }))
     .sort((a: RawBar, b: RawBar) => new Date(a.time).getTime() - new Date(b.time).getTime())
   return { bars, raw: null }
 }
@@ -89,7 +89,27 @@ function walkForOutcome(bars: RawBar[], direction: string, sl: number | null, tp
   for (const bar of bars) {
     const slTouched = sl != null && (isBuy ? bar.low <= sl : bar.high >= sl)
     const tpTouched = tp != null && (isBuy ? bar.high >= tp : bar.low <= tp)
-    if (slTouched) return { outcome: 'stopped_out' as const, slHit: true, tpHit: tpTouched, resolvedAt: bar.time }
+
+    if (slTouched && tpTouched) {
+      // STAGE FIX: real bug found -- this used to always report SL
+      // first whenever both were touched in the same bar, regardless
+      // of which genuinely happened first. OHLC data alone can't
+      // reveal true intra-bar order, but this systematically
+      // over-reported stopped_out every time both levels fell inside
+      // one bar's range -- directly contributing to "SL always hit,
+      // TP never hit" even on bars where TP may well have come first.
+      // Defensible heuristic: whichever level sits CLOSER to the
+      // bar's own open price is more likely to have been reached
+      // first, since price typically moves progressively away from
+      // the open before any reversal within the same bar.
+      const distToSL = Math.abs(bar.open - (sl as number))
+      const distToTP = Math.abs(bar.open - (tp as number))
+      if (distToTP < distToSL) {
+        return { outcome: 'tp_hit' as const, slHit: false, tpHit: true, resolvedAt: bar.time }
+      }
+      return { outcome: 'stopped_out' as const, slHit: true, tpHit: true, resolvedAt: bar.time }
+    }
+    if (slTouched) return { outcome: 'stopped_out' as const, slHit: true, tpHit: false, resolvedAt: bar.time }
     if (tpTouched) return { outcome: 'tp_hit' as const, slHit: false, tpHit: true, resolvedAt: bar.time }
   }
   return { outcome: 'still_open' as const, slHit: false, tpHit: false, resolvedAt: null as string | null }

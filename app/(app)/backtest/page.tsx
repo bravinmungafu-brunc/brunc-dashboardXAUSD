@@ -379,6 +379,66 @@ export default function BacktestPage() {
                 </div>
               )}
 
+              {/* STAGE ADD: three new breakdowns, per explicit request
+                  to make Backtest surface output that actually helps
+                  improve Pine, not just an overall number. */}
+              {r.summary.byRRLevel && Object.keys(r.summary.byRRLevel).length > 0 && (
+                <div className="space-y-2 mb-4 pt-3 border-t border-[#1B232C]">
+                  <div className="font-mono text-[9px] text-[#3A434D] uppercase mb-1">Win rate by R:R level used</div>
+                  {Object.entries(r.summary.byRRLevel).map(([rr, stats]: [string, any]) => {
+                    const n = stats.total
+                    const tier = sampleTier(n)
+                    return (
+                      <div key={rr} className="font-mono text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-[#7C8896]">{rr} <span className="text-[#3A434D]">· {stats.total}</span></span>
+                          <span className="text-white">{stats.winRate !== null ? stats.winRate + '%' : '—'}</span>
+                        </div>
+                        {n > 0 && <div className="text-[9px] mt-0.5" style={{ color: tier.color }}>{tier.label}</div>}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {r.summary.byGrade && Object.keys(r.summary.byGrade).length > 0 && (
+                <div className="space-y-2 mb-4 pt-3 border-t border-[#1B232C]">
+                  <div className="font-mono text-[9px] text-[#3A434D] uppercase mb-1">Win rate by grade band</div>
+                  {Object.entries(r.summary.byGrade).map(([band, stats]: [string, any]) => {
+                    const n = stats.total
+                    const tier = sampleTier(n)
+                    return (
+                      <div key={band} className="font-mono text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-[#7C8896]">{band} <span className="text-[#3A434D]">· {stats.total}</span></span>
+                          <span className="text-white">{stats.winRate !== null ? stats.winRate + '%' : '—'}</span>
+                        </div>
+                        {n > 0 && <div className="text-[9px] mt-0.5" style={{ color: tier.color }}>{tier.label}</div>}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {r.summary.bySession && Object.keys(r.summary.bySession).length > 0 && (
+                <div className="space-y-2 mb-4 pt-3 border-t border-[#1B232C]">
+                  <div className="font-mono text-[9px] text-[#3A434D] uppercase mb-1">Win rate by session</div>
+                  {Object.entries(r.summary.bySession).map(([session, stats]: [string, any]) => {
+                    const n = stats.total
+                    const tier = sampleTier(n)
+                    return (
+                      <div key={session} className="font-mono text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-[#7C8896]">{session} <span className="text-[#3A434D]">· {stats.total}</span></span>
+                          <span className="text-white">{stats.winRate !== null ? stats.winRate + '%' : '—'}</span>
+                        </div>
+                        {n > 0 && <div className="text-[9px] mt-0.5" style={{ color: tier.color }}>{tier.label}</div>}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
               {r.signals.length > 0 && (
                 <div className="border-t border-[#1B232C] pt-3 mt-3">
                   <div className="font-mono text-[10px] text-[#7C8896] uppercase mb-2">Individual signals ({r.signals.length})</div>

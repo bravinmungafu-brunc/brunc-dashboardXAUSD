@@ -1,3 +1,9 @@
+// STAGE ADD: reuses the SAME shared, DST-aware session logic as the
+// Topbar, so a signal's session in Backtest output means the exact
+// same thing it means everywhere else in this project -- no risk of
+// a second, silently-different session definition drifting apart.
+import { getActiveSession } from '@/lib/sessions'
+
 // lib/backtest/engine.ts
 //
 // A hand-ported TypeScript replica of BRUVV AI SNIPER SIGNALS, built
@@ -122,6 +128,12 @@ export interface BacktestSummary {
   avgPointsPerSignal: number | null
   byType: Record<string, { total: number; wins: number; winRate: number | null }>
   byPath: Record<string, { total: number; wins: number; winRate: number | null }>
+  // STAGE ADD: three genuinely actionable breakdowns, per explicit
+  // request to make Backtest surface output that actually helps
+  // improve Pine, not just an overall number.
+  byRRLevel: Record<string, { total: number; wins: number; winRate: number | null }>
+  byGrade: Record<string, { total: number; wins: number; winRate: number | null }>
+  bySession: Record<string, { total: number; wins: number; winRate: number | null }>
 }
 
 export interface BoxEvent {
@@ -229,6 +241,22 @@ export function walkForOutcome(
     const bar = bars1m[i]
     const slTouched = direction === 'buy' ? bar.low <= sl : bar.high >= sl
     const tpTouched = direction === 'buy' ? bar.high >= tp : bar.low <= tp
+
+    if (slTouched && tpTouched) {
+      // STAGE FIX: real bug found -- this used to always report SL
+      // first whenever both were touched in the same bar, regardless
+      // of which genuinely happened first, systematically biasing
+      // every past backtest win rate downward. Same defensible
+      // tie-break as the live resolvers: whichever level sits closer
+      // to the bar's own open is more likely to have been reached
+      // first.
+      const distToSL = Math.abs(bar.open - sl)
+      const distToTP = Math.abs(bar.open - tp)
+      if (distToTP < distToSL) {
+        return { outcome: 'tp_hit', resolvedAt: bar.time, barsToResolve: i - fromIdx }
+      }
+      return { outcome: 'stopped_out', resolvedAt: bar.time, barsToResolve: i - fromIdx }
+    }
     if (slTouched) return { outcome: 'stopped_out', resolvedAt: bar.time, barsToResolve: i - fromIdx }
     if (tpTouched) return { outcome: 'tp_hit', resolvedAt: bar.time, barsToResolve: i - fromIdx }
   }
@@ -451,6 +479,22 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
 
   const minSLDistance = params.minSLPoints * POINT_VALUE
 
+  // STAGE ADD: real diagnostics -- previous zero-signal runs were
+  // opaque black boxes. This tracks exactly where the funnel goes to
+  // zero: how many bars were skipped by the guard clause vs actually
+  // evaluated, and how often each setup's RAW condition was ever true
+  // (before edge-detection/latching), separately from how many times
+  // it actually FIRED -- distinguishing "the condition is never met"
+  // from "it's met but something blocks the actual fire."
+  const diagnostics = {
+    totalBars: bars1m.length,
+    barsSkippedByGuard: 0,
+    barsEvaluated: 0,
+    setupARawTrueCount: 0,
+    setupBFiredStageCount: { armed: 0, waitingRevert: 0, waitingRealign: 0 },
+    precisionRawTrueCount: 0,
+  }
+
   for (let i = 0; i < bars1m.length; i++) {
     const bar1m = bars1m[i]
     const t = bar1m.time
@@ -475,7 +519,8 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
     const s1 = chains['1'][i]
     const s3 = findAtOrBefore(chains['3'], t)
     const s5 = findAtOrBefore(chains['5'], t)
-    if (!s15 || !s60 || !s240 || !sD || !sW || !sM || !s12M || !s1) continue
+    if (!s15 || !s60 || !s240 || !sD || !sW || !sM || !s12M || !s1) { diagnostics.barsSkippedByGuard++; continue }
+    diagnostics.barsEvaluated++
 
     const protSwing = findAtOrBefore(protSwing5, t)
 
@@ -528,6 +573,7 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
     // + exec CSOD), matching BRUVV's real Stage 36 logic. DXY and the
     // 5-part Manual Entry Filter no longer gate this at all.
     if (cycleDir === 1 && anyHtfMidRejBuy && precisionBuyCsod) {
+      diagnostics.precisionRawTrueCount++
       const sl = calcSL('buy', bar1m.close, s15.refHigh, s15.refLow, protSwing?.protHigh ?? null, protSwing?.protLow ?? null, params)
       if (Math.abs(bar1m.close - sl) >= minSLDistance) {
         const candidates = [s60.refHigh, s60.refLow, s240.refHigh, s240.refLow, sD.refHigh, sD.refLow, sW.refHigh, sW.refLow, sM.refHigh, sM.refLow, s12M.refHigh, s12M.refLow, protSwing?.protHigh ?? null, protSwing?.protLow ?? null]
@@ -544,6 +590,7 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
     }
 
     if (cycleDir === -1 && anyHtfMidRejSell && precisionSellCsod) {
+      diagnostics.precisionRawTrueCount++
       const sl = calcSL('sell', bar1m.close, s15.refHigh, s15.refLow, protSwing?.protHigh ?? null, protSwing?.protLow ?? null, params)
       if (Math.abs(bar1m.close - sl) >= minSLDistance) {
         const candidates = [s60.refHigh, s60.refLow, s240.refHigh, s240.refLow, sD.refHigh, sD.refLow, sW.refHigh, sW.refLow, sM.refHigh, sM.refLow, s12M.refHigh, s12M.refLow, protSwing?.protHigh ?? null, protSwing?.protLow ?? null]
@@ -572,6 +619,7 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
 
       if (ev.csod) trk.usedSell = false
       const rawSell = ev.state === -1 && anyExecSellBOS && sellFadeCycleOK
+      if (rawSell) diagnostics.setupARawTrueCount++
       const firedSell = rawSell && !trk.usedSell && !trk.prevRawSell
       if (firedSell) trk.usedSell = true
       trk.prevRawSell = rawSell
@@ -579,6 +627,7 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
 
       if (ev.csod) trk.usedBuy = false
       const rawBuy = ev.state === 1 && anyExecBuyBOS && buyFadeCycleOK
+      if (rawBuy) diagnostics.setupARawTrueCount++
       const firedBuy = rawBuy && !trk.usedBuy && !trk.prevRawBuy
       if (firedBuy) trk.usedBuy = true
       trk.prevRawBuy = rawBuy
@@ -630,6 +679,9 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
         trk, ev.state, ev.refHigh, ev.refLow, ev.csod, ev.bos, ev.breakoutDist, boxRange,
         bar1m.close, params, anyExecBuyCSOD, anyExecSellCSOD, buyFadeCycleOK, sellFadeCycleOK
       )
+      if (trk.armedDir !== 0) diagnostics.setupBFiredStageCount.armed++
+      if (trk.waitingRevert) diagnostics.setupBFiredStageCount.waitingRevert++
+      if (trk.waitingRealign) diagnostics.setupBFiredStageCount.waitingRealign++
       if (fired) setupBFiredThisBar.push({ tag, dir: trk.armedDir, ev })
     }
 
@@ -735,6 +787,47 @@ export function summarize(signals: SimulatedSignal[]): BacktestSummary {
     byPath[key] = { total: group.length, wins: gWins, winRate: group.length ? Math.round((gWins / group.length) * 1000) / 10 : null }
   }
 
+  // STAGE ADD: win rate by the actual R:R ratio each signal used --
+  // directly answers "does a specific R:R rung perform worse/better,"
+  // genuinely actionable for tuning sniperRRLevels/precisionRRLevels.
+  const byRRLevel: BacktestSummary['byRRLevel'] = {}
+  const rrLevelsUsed = Array.from(new Set(resolved.map(s => s.rrUsed))).sort((a, b) => a - b)
+  for (const rr of rrLevelsUsed) {
+    const group = resolved.filter(s => s.rrUsed === rr)
+    const gWins = group.filter(s => s.outcome === 'tp_hit').length
+    byRRLevel[`1:${rr}`] = { total: group.length, wins: gWins, winRate: group.length ? Math.round((gWins / group.length) * 1000) / 10 : null }
+  }
+
+  // STAGE ADD: win rate by grade band -- directly answers "does a
+  // stronger HTF-agreement grade actually predict a better outcome,"
+  // which is the core premise the grade field is supposed to reflect.
+  const byGrade: BacktestSummary['byGrade'] = {}
+  const gradeBands: [string, (g: number) => boolean][] = [
+    ['0-2 (weak)', g => g <= 2],
+    ['3-4 (moderate)', g => g >= 3 && g <= 4],
+    ['5-7 (strong)', g => g >= 5],
+  ]
+  for (const [label, matches] of gradeBands) {
+    const group = resolved.filter(s => matches(s.gradeValue))
+    const gWins = group.filter(s => s.outcome === 'tp_hit').length
+    byGrade[label] = { total: group.length, wins: gWins, winRate: group.length ? Math.round((gWins / group.length) * 1000) / 10 : null }
+  }
+
+  // STAGE ADD: win rate by session -- directly answers "does one
+  // session genuinely underperform," using the exact same session
+  // definition as the rest of the project (imported, not duplicated).
+  const bySession: BacktestSummary['bySession'] = {}
+  const sessionNames = ['SYDNEY', 'TOKYO/ASIA', 'LONDON', 'NEW YORK', 'LONDON/NY OVERLAP', 'NONE']
+  for (const name of sessionNames) {
+    const group = resolved.filter(s => {
+      const sess = getActiveSession(new Date(s.time))
+      return (sess?.name ?? 'NONE') === name
+    })
+    if (group.length === 0) continue
+    const gWins = group.filter(s => s.outcome === 'tp_hit').length
+    bySession[name] = { total: group.length, wins: gWins, winRate: group.length ? Math.round((gWins / group.length) * 1000) / 10 : null }
+  }
+
   return {
     total: signals.length,
     wins,
@@ -745,5 +838,8 @@ export function summarize(signals: SimulatedSignal[]): BacktestSummary {
     avgPointsPerSignal,
     byType,
     byPath,
+    byRRLevel,
+    byGrade,
+    bySession,
   }
 }

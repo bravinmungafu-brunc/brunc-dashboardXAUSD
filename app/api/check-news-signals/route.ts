@@ -41,7 +41,7 @@ async function incrementUsage(by: number): Promise<number> {
   return next
 }
 
-interface RawBar { time: string; high: number; low: number }
+interface RawBar { time: string; open: number; high: number; low: number }
 
 async function fetchBarsSince(fromIso: string): Promise<RawBar[]> {
   const startParam = new Date(fromIso).toISOString().slice(0, 19).replace('T', ' ')
@@ -50,7 +50,7 @@ async function fetchBarsSince(fromIso: string): Promise<RawBar[]> {
   const data = await res.json()
   if (data?.status === 'error' || !Array.isArray(data?.values)) return []
   return data.values
-    .map((v: any) => ({ time: v.datetime, high: parseFloat(v.high), low: parseFloat(v.low) }))
+    .map((v: any) => ({ time: v.datetime, open: parseFloat(v.open), high: parseFloat(v.high), low: parseFloat(v.low) }))
     .sort((a: RawBar, b: RawBar) => new Date(a.time).getTime() - new Date(b.time).getTime())
 }
 
@@ -59,6 +59,17 @@ function walkForOutcome(bars: RawBar[], direction: string, sl: number | null, tp
   for (const bar of bars) {
     const slTouched = sl != null && (isBuy ? bar.low <= sl : bar.high >= sl)
     const tpTouched = tp != null && (isBuy ? bar.high >= tp : bar.low <= tp)
+
+    if (slTouched && tpTouched) {
+      // STAGE FIX: same real bug as check-open-signals -- see that
+      // file's note for the full reasoning.
+      const distToSL = Math.abs(bar.open - (sl as number))
+      const distToTP = Math.abs(bar.open - (tp as number))
+      if (distToTP < distToSL) {
+        return { outcome: 'tp_hit' as const, resolvedAt: bar.time }
+      }
+      return { outcome: 'stopped_out' as const, resolvedAt: bar.time }
+    }
     if (slTouched) return { outcome: 'stopped_out' as const, resolvedAt: bar.time }
     if (tpTouched) return { outcome: 'tp_hit' as const, resolvedAt: bar.time }
   }
