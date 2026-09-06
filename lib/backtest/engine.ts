@@ -438,7 +438,20 @@ export interface BarsByTF {
   '12M': Bar[]
 }
 
-export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): SimulatedSignal[] {
+export interface BacktestDiagnostics {
+  totalBars: number
+  barsSkippedByGuard: number
+  barsEvaluated: number
+  setupARawTrueCount: number
+  setupBFiredStageCount: { armed: number; waitingRevert: number; waitingRealign: number }
+  precisionRawTrueCount: number
+}
+
+// STAGE FIX: was `SimulatedSignal[]` -- diagnostics were computed in
+// full but then silently discarded at the return, so every
+// zero-signal run stayed an opaque black box for the caller. Now
+// returns both.
+export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): { signals: SimulatedSignal[]; diagnostics: BacktestDiagnostics } {
   const chains: Record<Timeframe, BoxEvent[]> = {
     '1': computeBoxChain(barsByTF['1']),
     '3': computeBoxChain(barsByTF['3']),
@@ -519,12 +532,38 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
     const s1 = chains['1'][i]
     const s3 = findAtOrBefore(chains['3'], t)
     const s5 = findAtOrBefore(chains['5'], t)
-    if (!s15 || !s60 || !s240 || !sD || !sW || !sM || !s12M || !s1) { diagnostics.barsSkippedByGuard++; continue }
+
+    // STAGE FIX: real design flaw, hit twice in practice. This used
+    // to require ALL SEVEN higher timeframes to have data before
+    // evaluating ANY bar -- so a short date range containing no
+    // completed weekly bar (very common: any window under ~2 weeks)
+    // meant sW was null on every iteration, skipping every single
+    // 1-minute bar and producing a total zero that looked identical
+    // to "the strategy found nothing." That's a data-availability
+    // limitation being silently reported as a strategy result, which
+    // is genuinely misleading.
+    //
+    // Now: only the timeframes this script actually NEEDS to compute
+    // a signal are required. 15m is genuinely required (f_calcSL
+    // anchors every stop to it, and the Precision cycle reads it).
+    // 1m is required (it's the exec chain). The slower tiers
+    // (60/240/D/W/M/12M) only contribute CONFLUENCE -- grade counts
+    // and mid-rejection counts -- so a missing one should reduce the
+    // available confluence, exactly as it genuinely does, not halt
+    // evaluation entirely. Missing tiers are simply excluded from
+    // those counts below.
+    if (!s15 || !s1) { diagnostics.barsSkippedByGuard++; continue }
     diagnostics.barsEvaluated++
 
     const protSwing = findAtOrBefore(protSwing5, t)
 
-    const rejTiers = [s60, s240, sD, sW, sM, s12M]
+    // Only include tiers that genuinely have data -- a missing slow
+    // timeframe legitimately contributes nothing here rather than
+    // blocking the whole evaluation.
+    const rejTiers = ([
+      { ev: s60, tag: '60' }, { ev: s240, tag: '240' }, { ev: sD, tag: 'D' },
+      { ev: sW, tag: 'W' }, { ev: sM, tag: 'M' }, { ev: s12M, tag: '12M' },
+    ] as { ev: BoxEvent | null; tag: string }[]).filter((x): x is { ev: BoxEvent; tag: string } => x.ev != null)
     const midRejSellCount = rejTiers.filter(ev => ev.rejHighCount >= 2).length
     const midRejBuyCount = rejTiers.filter(ev => ev.rejLowCount >= 2).length
     const anyHtfMidRejSell = midRejSellCount >= params.htfMidRejMinCount
@@ -532,8 +571,15 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
 
     const cycleDir = precisionCycleDirAt(chains['15'], barsByTF['15'], t)
 
-    const sellFadeCycleOK = s240.state === 0 || s240.state === -1 || (s240.state === 1 && s240.rejLowCount > 0)
-    const buyFadeCycleOK = s240.state === 0 || s240.state === 1 || (s240.state === -1 && s240.rejHighCount > 0)
+    // STAGE FIX: null-safe now that slow timeframes can legitimately
+    // be absent in a short backtest window. When 4H data genuinely
+    // doesn't exist, this gate FAILS OPEN (permits the signal) rather
+    // than blocking -- matching the same fail-open convention the
+    // live Pine script uses for its DXY filter when that feed is
+    // unavailable. Blocking on missing data would silently suppress
+    // signals for a reason that has nothing to do with the strategy.
+    const sellFadeCycleOK = s240 == null || s240.state === 0 || s240.state === -1 || (s240.state === 1 && s240.rejLowCount > 0)
+    const buyFadeCycleOK = s240 == null || s240.state === 0 || s240.state === 1 || (s240.state === -1 && s240.rejHighCount > 0)
 
     const box1Range = s1.refHigh - s1.refLow
     const box3Range = s3 ? s3.refHigh - s3.refLow : 0
@@ -576,7 +622,7 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
       diagnostics.precisionRawTrueCount++
       const sl = calcSL('buy', bar1m.close, s15.refHigh, s15.refLow, protSwing?.protHigh ?? null, protSwing?.protLow ?? null, params)
       if (Math.abs(bar1m.close - sl) >= minSLDistance) {
-        const candidates = [s60.refHigh, s60.refLow, s240.refHigh, s240.refLow, sD.refHigh, sD.refLow, sW.refHigh, sW.refLow, sM.refHigh, sM.refLow, s12M.refHigh, s12M.refLow, protSwing?.protHigh ?? null, protSwing?.protLow ?? null]
+        const candidates = [s60?.refHigh ?? null, s60?.refLow ?? null, s240?.refHigh ?? null, s240?.refLow ?? null, sD?.refHigh ?? null, sD?.refLow ?? null, sW?.refHigh ?? null, sW?.refLow ?? null, sM?.refHigh ?? null, sM?.refLow ?? null, s12M?.refHigh ?? null, s12M?.refLow ?? null, protSwing?.protHigh ?? null, protSwing?.protLow ?? null]
         const rrUsed = pickNearestRR('buy', bar1m.close, sl, candidates, params.precisionRRLevels)
         const tp = buildSingleTP('buy', bar1m.close, sl, rrUsed)
         const { outcome, resolvedAt, barsToResolve } = walkForOutcome(bars1m, i, 'buy', sl, tp)
@@ -593,7 +639,7 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
       diagnostics.precisionRawTrueCount++
       const sl = calcSL('sell', bar1m.close, s15.refHigh, s15.refLow, protSwing?.protHigh ?? null, protSwing?.protLow ?? null, params)
       if (Math.abs(bar1m.close - sl) >= minSLDistance) {
-        const candidates = [s60.refHigh, s60.refLow, s240.refHigh, s240.refLow, sD.refHigh, sD.refLow, sW.refHigh, sW.refLow, sM.refHigh, sM.refLow, s12M.refHigh, s12M.refLow, protSwing?.protHigh ?? null, protSwing?.protLow ?? null]
+        const candidates = [s60?.refHigh ?? null, s60?.refLow ?? null, s240?.refHigh ?? null, s240?.refLow ?? null, sD?.refHigh ?? null, sD?.refLow ?? null, sW?.refHigh ?? null, sW?.refLow ?? null, sM?.refHigh ?? null, sM?.refLow ?? null, s12M?.refHigh ?? null, s12M?.refLow ?? null, protSwing?.protHigh ?? null, protSwing?.protLow ?? null]
         const rrUsed = pickNearestRR('sell', bar1m.close, sl, candidates, params.precisionRRLevels)
         const tp = buildSingleTP('sell', bar1m.close, sl, rrUsed)
         const { outcome, resolvedAt, barsToResolve } = walkForOutcome(bars1m, i, 'sell', sl, tp)
@@ -606,10 +652,14 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
       }
     }
 
-    const htfTiers: { ev: BoxEvent; tag: string }[] = [
+    // STAGE FIX: filter out tiers with no data, now that slow
+    // timeframes can legitimately be absent in a short window.
+    // A missing tier simply can't produce a signal -- it's excluded
+    // rather than crashing on a null access.
+    const htfTiers: { ev: BoxEvent; tag: string }[] = ([
       { ev: s15, tag: '15' }, { ev: s60, tag: '60' }, { ev: s240, tag: '240' },
       { ev: sD, tag: 'D' }, { ev: sW, tag: 'W' }, { ev: sM, tag: 'M' }, { ev: s12M, tag: '12M' },
-    ]
+    ] as { ev: BoxEvent | null; tag: string }[]).filter((x): x is { ev: BoxEvent; tag: string } => x.ev != null)
 
     // STAGE SYNC: Setup A -- 3 conditions only (context/position + BOS
     // + 4H cycle gate). DXY agreement no longer required.
@@ -653,7 +703,7 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
         // point of Stage 26's unification).
         const sl = calcSL(selected.dir, bar1m.close, s15.refHigh, s15.refLow, protSwing?.protHigh ?? null, protSwing?.protLow ?? null, params)
         if (Math.abs(bar1m.close - sl) >= minSLDistance) {
-          const candidates = [s60.refHigh, s60.refLow, s240.refHigh, s240.refLow, sD.refHigh, sD.refLow, sW.refHigh, sW.refLow, sM.refHigh, sM.refLow, s12M.refHigh, s12M.refLow, protSwing?.protHigh ?? null, protSwing?.protLow ?? null]
+          const candidates = [s60?.refHigh ?? null, s60?.refLow ?? null, s240?.refHigh ?? null, s240?.refLow ?? null, sD?.refHigh ?? null, sD?.refLow ?? null, sW?.refHigh ?? null, sW?.refLow ?? null, sM?.refHigh ?? null, sM?.refLow ?? null, s12M?.refHigh ?? null, s12M?.refLow ?? null, protSwing?.protHigh ?? null, protSwing?.protLow ?? null]
           const rrUsed = pickNearestRR(selected.dir, bar1m.close, sl, candidates, params.sniperRRLevels)
           const tp = buildSingleTP(selected.dir, bar1m.close, sl, rrUsed)
           const { outcome, resolvedAt, barsToResolve } = walkForOutcome(bars1m, i, selected.dir, sl, tp)
@@ -697,7 +747,7 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
         const dirTxt: 'buy' | 'sell' = selectedB.dir === 1 ? 'buy' : 'sell'
         const sl = calcSL(dirTxt, bar1m.close, s15.refHigh, s15.refLow, protSwing?.protHigh ?? null, protSwing?.protLow ?? null, params)
         if (Math.abs(bar1m.close - sl) >= minSLDistance) {
-          const candidates = [s60.refHigh, s60.refLow, s240.refHigh, s240.refLow, sD.refHigh, sD.refLow, sW.refHigh, sW.refLow, sM.refHigh, sM.refLow, s12M.refHigh, s12M.refLow, protSwing?.protHigh ?? null, protSwing?.protLow ?? null]
+          const candidates = [s60?.refHigh ?? null, s60?.refLow ?? null, s240?.refHigh ?? null, s240?.refLow ?? null, sD?.refHigh ?? null, sD?.refLow ?? null, sW?.refHigh ?? null, sW?.refLow ?? null, sM?.refHigh ?? null, sM?.refLow ?? null, s12M?.refHigh ?? null, s12M?.refLow ?? null, protSwing?.protHigh ?? null, protSwing?.protLow ?? null]
           const rrUsed = pickNearestRR(dirTxt, bar1m.close, sl, candidates, params.sniperRRLevels)
           const tp = buildSingleTP(dirTxt, bar1m.close, sl, rrUsed)
           const { outcome, resolvedAt, barsToResolve } = walkForOutcome(bars1m, i, dirTxt, sl, tp)
@@ -712,7 +762,7 @@ export function runBacktest(barsByTF: BarsByTF, params: BacktestParams): Simulat
     }
   }
 
-  return signals
+  return { signals, diagnostics }
 }
 
 function execTfFor(s1: BoxEvent, s3: BoxEvent | null, s5: BoxEvent | null, dir: number): string {
@@ -722,11 +772,16 @@ function execTfFor(s1: BoxEvent, s3: BoxEvent | null, s5: BoxEvent | null, dir: 
   return '1'
 }
 
-function precisionHtfRung(rejTiers: BoxEvent[], isSell: boolean): string {
-  const tags = ['60', '240', 'D', 'W', 'M', '12M']
-  for (let idx = 0; idx < rejTiers.length; idx++) {
-    const count = isSell ? rejTiers[idx].rejHighCount : rejTiers[idx].rejLowCount
-    if (count >= 2) return tags[idx]
+// STAGE FIX: this used to map rejTiers[idx] to tags[idx]
+// positionally, which was correct only while rejTiers ALWAYS had
+// exactly 6 entries in fixed order. Now that missing slow timeframes
+// are filtered out, those indices no longer line up -- it would
+// silently report the wrong timeframe name. Fixed by carrying each
+// tier's own tag alongside it rather than relying on position.
+function precisionHtfRung(rejTiers: { ev: BoxEvent; tag: string }[], isSell: boolean): string {
+  for (const { ev, tag } of rejTiers) {
+    const count = isSell ? ev.rejHighCount : ev.rejLowCount
+    if (count >= 2) return tag
   }
   return '12M'
 }

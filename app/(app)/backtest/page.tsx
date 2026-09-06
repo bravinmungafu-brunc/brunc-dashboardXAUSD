@@ -53,6 +53,18 @@ interface ConfigResult {
     bySession: Record<string, { total: number; wins: number; winRate: number | null }>
   }
   signals: any[]
+  // STAGE ADD: remembering the lesson from the last build failure --
+  // this page keeps its OWN inline copy of the response shape, so
+  // anything added to the backend MUST be added here too or the
+  // TypeScript build fails.
+  diagnostics?: {
+    totalBars: number
+    barsSkippedByGuard: number
+    barsEvaluated: number
+    setupARawTrueCount: number
+    setupBFiredStageCount: { armed: number; waitingRevert: number; waitingRealign: number }
+    precisionRawTrueCount: number
+  }
 }
 
 function todayISO() {
@@ -394,6 +406,30 @@ export default function BacktestPage() {
               {/* STAGE ADD: three new breakdowns, per explicit request
                   to make Backtest surface output that actually helps
                   improve Pine, not just an overall number. */}
+              {/* STAGE ADD: the piece that turns a zero-signal run
+                  from an opaque mystery into a real answer -- shows
+                  exactly where the funnel collapsed. Rendered
+                  prominently (amber) when zero signals fired, since
+                  that's precisely when it matters most. */}
+              {r.diagnostics && (
+                <div className={`rounded-lg p-3 mb-4 font-mono text-[10px] ${r.summary.total === 0 ? 'bg-[#F5A623]/10 border border-[#F5A623]/30 text-[#F5A623]' : 'bg-[#0F141A] text-[#7C8896]'}`}>
+                  <div className="uppercase tracking-wide mb-1.5 font-bold">Why this result (signal funnel)</div>
+                  <div>Bars loaded: {r.diagnostics.totalBars} · evaluated: {r.diagnostics.barsEvaluated} · skipped (missing 15m/1m box data): {r.diagnostics.barsSkippedByGuard}</div>
+                  <div className="mt-1">Setup A raw condition ever true: {r.diagnostics.setupARawTrueCount} bars</div>
+                  <div>Setup B stages -- armed: {r.diagnostics.setupBFiredStageCount.armed} · awaiting pullback: {r.diagnostics.setupBFiredStageCount.waitingRevert} · awaiting realign: {r.diagnostics.setupBFiredStageCount.waitingRealign}</div>
+                  <div>Precision raw condition ever true: {r.diagnostics.precisionRawTrueCount} bars</div>
+                  {r.summary.total === 0 && (
+                    <div className="mt-2 pt-2 border-t border-[#F5A623]/20">
+                      {r.diagnostics.barsEvaluated === 0
+                        ? 'All bars were skipped -- the 15m or 1m box chain has no data for this range. Try a longer date range so the box logic has enough history to establish state.'
+                        : r.diagnostics.setupARawTrueCount === 0 && r.diagnostics.precisionRawTrueCount === 0
+                          ? 'Bars evaluated fine, but no setup condition was ever met in this window -- the gates genuinely never aligned here, not a data problem. A longer or different range would tell you more.'
+                          : 'Conditions were met on some bars but no signal fired -- likely the one-shot latch or edge-detection blocking repeats. Worth investigating if this persists.'}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {r.summary.byRRLevel && Object.keys(r.summary.byRRLevel).length > 0 && (
                 <div className="space-y-2 mb-4 pt-3 border-t border-[#1B232C]">
                   <div className="font-mono text-[9px] text-[#3A434D] uppercase mb-1">Win rate by R:R level used</div>

@@ -158,8 +158,8 @@ export async function POST(req: Request) {
 
     const results = configs.map(cfg => {
       const params = mergeParams(cfg.params)
-      const signals = runBacktest(barsByTF, params)
-      return { name: cfg.name, params, summary: summarize(signals), signals }
+      const { signals, diagnostics } = runBacktest(barsByTF, params)
+      return { name: cfg.name, params, summary: summarize(signals), signals, diagnostics }
     })
 
     return Response.json({
