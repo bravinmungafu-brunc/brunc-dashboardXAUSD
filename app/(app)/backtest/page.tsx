@@ -39,6 +39,18 @@ interface ConfigResult {
     netPoints: number; avgPointsPerSignal: number | null
     byType: Record<string, { total: number; wins: number; winRate: number | null }>
     byPath: Record<string, { total: number; wins: number; winRate: number | null }>
+    // STAGE FIX: these three were added to the engine's own
+    // BacktestSummary interface but NOT here -- this page declares
+    // its own separate inline copy of the shape, so the engine
+    // having them wasn't enough. That mismatch is exactly what
+    // failed the TypeScript build. Kept as an inline declaration
+    // (rather than importing BacktestSummary) to match how this file
+    // already worked, but noting the real risk: two hand-maintained
+    // copies of one shape WILL drift again -- this is the second
+    // time. Worth importing the type directly if it drifts once more.
+    byRRLevel: Record<string, { total: number; wins: number; winRate: number | null }>
+    byGrade: Record<string, { total: number; wins: number; winRate: number | null }>
+    bySession: Record<string, { total: number; wins: number; winRate: number | null }>
   }
   signals: any[]
 }
