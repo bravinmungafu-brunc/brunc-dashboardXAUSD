@@ -174,7 +174,19 @@ export default function Topbar() {
   return (
     <div>
       <div className="h-[3px] bg-gradient-to-r from-[#FF2E63] via-[#FF2E63] to-transparent" />
-      <div className="flex items-center gap-3 md:gap-6 px-3 md:px-6 py-2.5 md:py-3 bg-[#05070A] border-b border-[#1B232C] overflow-x-auto whitespace-nowrap font-mono text-[11px] md:text-xs relative">
+      {/* STAGE FIX: real bug -- the notification dropdown rendered but
+          was invisible. This bar had overflow-x-auto for horizontal
+          scrolling of the indicators, and per CSS rules setting
+          overflow-x to auto makes overflow-y compute to auto as well
+          (not visible) -- so the absolutely-positioned dropdown
+          extending BELOW the bar was clipped away entirely. The red
+          unseen-dot still showed, which is exactly why this looked
+          like "data loads but dropdown is broken".
+          Fixed by splitting into an OUTER container with no overflow
+          (holding the bell, so its dropdown can escape freely) and an
+          INNER scrollable container holding only the indicators. */}
+      <div className="flex items-center gap-3 md:gap-6 px-3 md:px-6 py-2.5 md:py-3 bg-[#05070A] border-b border-[#1B232C] font-mono text-[11px] md:text-xs relative">
+        <div className="flex items-center gap-3 md:gap-6 overflow-x-auto whitespace-nowrap flex-1 min-w-0">
         <span className="flex items-center gap-2 text-white font-semibold flex-shrink-0">
           <span className="w-1.5 h-1.5 rounded-full bg-[#34D399] animate-pulse" /> XAUUSD
         </span>
@@ -237,7 +249,18 @@ export default function Topbar() {
           </button>
 
           {showNotifications && (
-            <div className="absolute right-0 top-full mt-2 w-80 max-h-96 overflow-y-auto bg-[#0B0F14] border border-[#1B232C] rounded-xl shadow-2xl z-50">
+            /* STAGE FIX: switched from `absolute` to `fixed`. The
+               previous fix attempted to move the bell outside the
+               overflow-x-auto container, but the container was never
+               actually closed before the bell -- so the bell (and its
+               dropdown) stayed nested inside it, and the dropdown was
+               still clipped away below the bar. `fixed` positions
+               against the viewport rather than an ancestor, so it
+               escapes overflow clipping no matter how deeply nested
+               the bell ends up -- immune to this whole class of bug
+               rather than dependent on getting the nesting exactly
+               right. Positioned just under the topbar on the right. */
+            <div className="fixed right-3 md:right-6 top-[52px] md:top-[58px] w-80 max-h-96 overflow-y-auto bg-[#0B0F14] border border-[#1B232C] rounded-xl shadow-2xl z-[100]">
               <div className="px-4 py-3 border-b border-[#1B232C] font-mono text-[10px] tracking-widest text-[#7C8896] uppercase">
                 Notifications
               </div>
