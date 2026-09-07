@@ -232,6 +232,14 @@ export default function Topbar() {
           </span>
         )}
 
+        {/* STAGE FIX: closing the inner scroll container HERE -- this
+            was the missing piece. A prior edit opened this container
+            (to give the indicators horizontal scrolling) but never
+            closed it, which both broke the JSX build AND kept the
+            bell nested inside the overflow area. Closed here so the
+            bell genuinely sits outside the scrolling region. */}
+        </div>
+
         {/* STAGE ADD: notification bell -- new. Shows a red dot when
             there's a notification newer than the last time the panel
             was opened. Click to open a dropdown of recent
